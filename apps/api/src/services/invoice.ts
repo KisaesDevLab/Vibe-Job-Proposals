@@ -185,8 +185,12 @@ export async function finalizeInvoice(invoiceId: string, userId: string | null):
 
     // Serialize sequence assignment per job by locking the job row first
     // (FOR UPDATE is not permitted alongside an aggregate query).
+    // NB: MAX is taken over ALL invoices for the job (including 'void') so a
+    // voided invoice's sequence number is retained and never reused — this
+    // honors the Phase 16 acceptance criteria ("sequence numbers skip voided
+    // invoices"), which take precedence over the Phase 13 task-3 sample SQL.
     await tx`SELECT id FROM jobs WHERE id=${inv.job_id} FOR UPDATE`;
-    const [{ next }] = await tx`SELECT COALESCE(MAX(sequence_number),0)+1 AS next FROM invoices WHERE job_id=${inv.job_id} AND status != 'void'`;
+    const [{ next }] = await tx`SELECT COALESCE(MAX(sequence_number),0)+1 AS next FROM invoices WHERE job_id=${inv.job_id}`;
     const seq = Number(next);
     const billedReference = `${inv.job_code}.${String(seq).padStart(2, '0')}`;
 

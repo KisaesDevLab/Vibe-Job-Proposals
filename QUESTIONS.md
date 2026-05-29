@@ -87,3 +87,21 @@ internal app); revisit in a maintenance pass. Logged as known.
 Long-running detached servers receive SIGTERM when a tool call ends, so end-to-end
 verification uses in-process service calls (and, for the green gate, supertest), not a
 persistent server. Production uses the normal long-running server via entrypoint.sh.
+
+### Q2.1 — Void sequence numbering: CLAUDE.md internal contradiction
+Phase 13 task 3 sample SQL computes the next sequence with `WHERE status != 'void'`,
+but Phase 16 acceptance ("Sequence numbers skip voided invoices" / task 13 "voided
+invoice's sequence number not reused" / E2E "re-finalize → new sequence number") requires
+the opposite.
+**Decision:** Compute `MAX(sequence_number)` over **all** invoices for the job (including
+void) so a voided `.01` is retained and a reissue becomes `.02`. The acceptance criteria
+and E2E test govern behavior over the sample SQL snippet.
+**Files:** `apps/api/src/services/invoice.ts`.
+**Verified:** smoke test reissue yields sequence 2.
+
+### Q2.2 — Programmatic smoke test
+Phase 20 SMOKETEST is documented as a manual checklist; I also implemented it as a
+single-process automated script (`scripts/smoke.ts`) that boots the API + BullMQ workers
+in-process and drives the entire lifecycle over real HTTP. This is how the build verifies
+the app (the sandbox kills detached servers). `docs/SMOKETEST.md` documents the manual
+steps; `npm run smoke` runs the automated equivalent.
