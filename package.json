@@ -1,0 +1,52 @@
+{
+  "name": "darrow-time-invoicing",
+  "version": "1.0.0",
+  "private": true,
+  "license": "LicenseRef-PolyForm-Internal-Use-1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/shared",
+    "packages/db",
+    "packages/workers",
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm -w @darrow/api run dev",
+    "dev:web": "npm -w @darrow/web run dev",
+    "dev:workers": "npm -w @darrow/workers run dev",
+    "build": "npm -w @darrow/shared run build && npm -w @darrow/db run build && npm -w @darrow/api run build && npm -w @darrow/workers run build && npm -w @darrow/web run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --ext .ts,.tsx --max-warnings=0",
+    "format": "prettier --write .",
+    "type-check": "tsc -b --pretty",
+    "db:migrate": "tsx packages/db/src/migrate.ts",
+    "db:seed": "tsx packages/db/src/seed.ts",
+    "db:reset": "tsx packages/db/src/reset.ts",
+    "bootstrap": "tsx scripts/bootstrap-admin.ts",
+    "import:xlsm": "tsx scripts/import-xlsm.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^7.13.0",
+    "@typescript-eslint/parser": "^7.13.0",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.2",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "prettier": "^3.3.2",
+    "tsx": "^4.15.6",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0",
+    "drizzle-orm": "^0.31.2",
+    "postgres": "^3.4.4",
+    "bcryptjs": "^2.4.3",
+    "exceljs": "^4.4.0",
+    "@types/bcryptjs": "^2.4.6"
+  }
+}

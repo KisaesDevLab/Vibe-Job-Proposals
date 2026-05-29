@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node"],
+    "paths": {
+      "@darrow/shared": ["../shared/src/index.ts"],
+      "@darrow/db": ["../db/src/index.ts"]
+    }
+  },
+  "references": [{ "path": "../shared" }, { "path": "../db" }],
+  "include": ["src/**/*"]
+}
