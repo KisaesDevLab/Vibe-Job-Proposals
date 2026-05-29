@@ -50,20 +50,64 @@ function Company({ data, onSaved }: { data: any; onSaved: () => void }) {
 }
 
 function Branding({ data, onSaved }: { data: any; onSaved: () => void }) {
+  const [showPh, setShowPh] = useState(false);
+  const { data: ph } = useQuery({ queryKey: ['placeholders'], queryFn: () => api.get<any>('/settings/placeholders'), enabled: showPh });
   async function up(kind: 'logo' | 'template', file: File) {
     try { await api.upload(`/settings/${kind}`, file); toast(`${kind} uploaded`); onSaved(); } catch (e: any) { toast(e.message, 'err'); }
   }
   return (
-    <div className="card max-w-xl space-y-4 p-5">
-      <div>
-        <label className="label">Logo (PNG/JPG, max 2MB)</label>
-        {data.logoPath && <img src={`/api/settings/logo?t=${Date.now()}`} alt="logo" className="mb-2 h-16" />}
-        <input type="file" accept="image/png,image/jpeg" onChange={(e) => e.target.files?.[0] && up('logo', e.target.files[0])} />
+    <div className="space-y-4">
+      <div className="card max-w-xl space-y-4 p-5">
+        <div>
+          <label className="label">Logo (PNG/JPG, max 2MB)</label>
+          {data.logoPath && <img src={`/api/settings/logo?t=${Date.now()}`} alt="logo" className="mb-2 h-16" />}
+          <input type="file" accept="image/png,image/jpeg" onChange={(e) => e.target.files?.[0] && up('logo', e.target.files[0])} />
+        </div>
+        <div>
+          <label className="label">Invoice template (.docx, max 5MB)</label>
+          <div className="mb-2 text-sm text-muted">
+            {data.templateDocxPath ? 'Template uploaded' : 'No template'}
+            {data.templateDocxPath && <> · <a className="text-copper" href="/api/settings/template/download">download current</a></>}
+            {' · '}<a className="text-copper" href="/api/settings/example-template">download starter template</a>
+            {' · '}<button className="text-copper" onClick={() => setShowPh((v) => !v)}>view placeholders</button>
+          </div>
+          <input type="file" accept=".docx" onChange={(e) => e.target.files?.[0] && up('template', e.target.files[0])} />
+          {showPh && ph && <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-paper p-3 text-xs">{ph.markdown}</pre>}
+        </div>
       </div>
-      <div>
-        <label className="label">Invoice template (.docx, max 5MB)</label>
-        <div className="mb-2 text-sm text-muted">{data.templateDocxPath ? 'Template uploaded' : 'No template'} · <a className="text-copper" href="/api/settings/template/download">download current</a></div>
-        <input type="file" accept=".docx" onChange={(e) => e.target.files?.[0] && up('template', e.target.files[0])} />
+      <SmtpSection data={data} onSaved={onSaved} />
+    </div>
+  );
+}
+
+function SmtpSection({ data, onSaved }: { data: any; onSaved: () => void }) {
+  const [f, setF] = useState({ smtp_host: '', smtp_port: '587', smtp_user: '', smtp_password: '', smtp_from_address: '', smtp_from_name: '', smtp_enabled: false });
+  const [testTo, setTestTo] = useState('');
+  useEffect(() => setF((p) => ({ ...p, smtp_host: data.smtpHost ?? '', smtp_port: String(data.smtpPort ?? 587), smtp_user: data.smtpUser ?? '', smtp_from_address: data.smtpFromAddress ?? '', smtp_from_name: data.smtpFromName ?? '', smtp_enabled: !!data.smtpEnabled })), [data]);
+  const save = useMutation({ mutationFn: () => api.put('/settings/smtp', { ...f, smtp_port: Number(f.smtp_port), smtp_password: f.smtp_password || undefined }), onSuccess: () => { toast('SMTP saved'); onSaved(); }, onError: (e: any) => toast(e.message, 'err') });
+  const test = useMutation({ mutationFn: () => api.post('/settings/smtp/test', { to: testTo || undefined }), onSuccess: () => toast('SMTP verified'), onError: (e: any) => toast(e.message, 'err') });
+  const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
+  return (
+    <div className="card max-w-xl space-y-3 p-5">
+      <div className="font-semibold">Email (SMTP) — optional</div>
+      <p className="text-xs text-muted">Download is the primary delivery path; email is optional. Password is encrypted at rest.{data.smtp_password_set ? ' A password is currently stored.' : ''}</p>
+      <div className="grid grid-cols-2 gap-2">
+        <div><label className="label">Host</label><input className="input" value={f.smtp_host} onChange={set('smtp_host')} /></div>
+        <div><label className="label">Port</label><input className="input" value={f.smtp_port} onChange={set('smtp_port')} /></div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div><label className="label">User</label><input className="input" value={f.smtp_user} onChange={set('smtp_user')} /></div>
+        <div><label className="label">Password</label><input className="input" type="password" placeholder={data.smtp_password_set ? '••••••• (unchanged)' : ''} value={f.smtp_password} onChange={set('smtp_password')} /></div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div><label className="label">From address</label><input className="input" value={f.smtp_from_address} onChange={set('smtp_from_address')} /></div>
+        <div><label className="label">From name</label><input className="input" value={f.smtp_from_name} onChange={set('smtp_from_name')} /></div>
+      </div>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.smtp_enabled} onChange={(e) => setF({ ...f, smtp_enabled: e.target.checked })} /> Enable email delivery</label>
+      <div className="flex items-center gap-2">
+        <button className="btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>Save SMTP</button>
+        <input className="input w-48" placeholder="test recipient" value={testTo} onChange={(e) => setTestTo(e.target.value)} />
+        <button className="btn-ghost" onClick={() => test.mutate()} disabled={test.isPending}>Test connect</button>
       </div>
     </div>
   );

@@ -44,6 +44,22 @@ jobsRouter.get(
   }),
 );
 
+// CSV export (must precede '/:id'). Phase 8 task 19.
+jobsRouter.get(
+  '/export/csv',
+  ah(async (_req, res) => {
+    const rows = await db
+      .select({ code: jobs.code, customer: customers.name, description: jobs.description, billingType: jobs.billingType, active: jobs.active })
+      .from(jobs)
+      .leftJoin(customers, eq(jobs.customerId, customers.id))
+      .orderBy(desc(jobs.createdAt));
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const header = 'code,customer,description,billing_type,active\n';
+    const csv = header + rows.map((r) => [r.code, r.customer, r.description, r.billingType, r.active].map(esc).join(',')).join('\n');
+    res.type('text/csv').attachment('jobs.csv').send(csv);
+  }),
+);
+
 jobsRouter.get(
   '/:id',
   ah(async (req, res) => {

@@ -16,7 +16,10 @@ export function JobsPage() {
   return (
     <div>
       <PageHeader title="Jobs" subtitle="Work orders by customer"
-        actions={<button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New Job</button>} />
+        actions={<>
+          <a className="btn-ghost" href="/api/jobs/export/csv">Export CSV</a>
+          <button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New Job</button>
+        </>} />
       <input className="input mb-4 max-w-sm" placeholder="Search code or description…" value={search} onChange={(e) => setSearch(e.target.value)} />
       {isLoading ? <Skeleton /> : !data?.jobs.length ? <Empty title="No jobs found" /> : (
         <div className="card overflow-hidden">

@@ -86,7 +86,14 @@ function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onCl
         <div className="space-y-2">
           {data?.attachments?.map((a: any) => (
             <div key={a.id} className="flex items-center justify-between rounded-lg border border-line p-2 text-sm">
-              <span className="flex items-center gap-2"><Paperclip size={14} />{a.originalFilename}</span>
+              <span className="flex items-center gap-2">
+                {a.status === 'ready' ? (
+                  <img src={`/api/expenses/attachments/${a.id}/preview`} alt="" className="h-10 w-8 rounded border border-line object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
+                ) : (
+                  <Paperclip size={14} />
+                )}
+                {a.originalFilename}
+              </span>
               <span className="flex items-center gap-2">
                 <Badge status={a.status}>{a.status}</Badge>
                 {a.status === 'ready' && <a className="text-copper" href={`/api/expenses/attachments/${a.id}/download`} target="_blank" rel="noreferrer"><Download size={15} /></a>}

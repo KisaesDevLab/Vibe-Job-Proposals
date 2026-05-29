@@ -13,3 +13,7 @@ docs/FIRST_RUN.md
 playwright-report/
 test-results/
 *.tsbuildinfo
+
+# Redis persistence (dev)
+dump.rdb
+*.rdb

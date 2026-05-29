@@ -17,7 +17,10 @@ export function CustomersPage() {
   return (
     <div>
       <PageHeader title="Customers" subtitle="Bill-to details, markup defaults & rate schedules"
-        actions={<button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New Customer</button>} />
+        actions={<>
+          <a className="btn-ghost" href="/api/customers/export/csv">Export CSV</a>
+          <button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New Customer</button>
+        </>} />
       {isLoading ? <Skeleton /> : !data?.length ? <Empty title="No customers yet" /> : (
         <div className="card overflow-hidden">
           <table className="w-full">

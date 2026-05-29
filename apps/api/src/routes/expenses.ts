@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
-import { writeFileSync, existsSync, unlinkSync, createReadStream, rmSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { writeFileSync, existsSync, unlinkSync, createReadStream, rmSync, renameSync } from 'node:fs';
+import { join, extname, dirname, basename } from 'node:path';
 import { fileTypeFromBuffer } from 'file-type';
 import { ok, fail, expenseSchema } from '@darrow/shared';
 import { db, expenses, expenseAttachments } from '@darrow/db';
@@ -58,6 +58,9 @@ expensesRouter.post(
   '/',
   ah(async (req: AuthedRequest, res) => {
     const body = expenseSchema.parse(req.body);
+    // Phase 10: reject dates more than 30 days in the future.
+    const limit = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    if (body.work_date > limit) return res.status(400).json(fail('future_date', 'work_date is more than 30 days in the future'));
     const [row] = await db
       .insert(expenses)
       .values({
@@ -174,6 +177,30 @@ expensesRouter.get(
     if (!att || !existsSync(att.storedPath)) return res.status(404).end();
     res.type('application/pdf');
     createReadStream(att.storedPath).pipe(res);
+  }),
+);
+
+// First-page PNG thumbnail (Phase 10 task 16) — gs + graphicsmagick via pdf2pic,
+// generated lazily and cached next to the attachment.
+expensesRouter.get(
+  '/attachments/:id/preview',
+  ah(async (req, res) => {
+    const [att] = await db.select().from(expenseAttachments).where(eq(expenseAttachments.id, req.params.id));
+    if (!att || !existsSync(att.storedPath)) return res.status(404).end();
+    if (att.status !== 'ready') return res.status(409).json(fail('not_ready', 'Attachment not converted yet'));
+    const thumb = att.storedPath.replace(/\.pdf$/i, '.thumb.png');
+    if (!existsSync(thumb)) {
+      const { fromPath } = await import('pdf2pic');
+      const dir = dirname(att.storedPath);
+      const base = basename(thumb, '.png');
+      await fromPath(att.storedPath, { density: 100, savePath: dir, saveFilename: base, format: 'png', width: 600, preserveAspectRatio: true })(1);
+      // pdf2pic writes "<base>.1.png"; normalize to our cache name.
+      const produced = join(dir, `${base}.1.png`);
+      if (existsSync(produced) && !existsSync(thumb)) renameSync(produced, thumb);
+    }
+    if (!existsSync(thumb)) return res.status(500).json(fail('thumb_failed', 'Could not render thumbnail'));
+    res.type('image/png');
+    createReadStream(thumb).pipe(res);
   }),
 );
 

@@ -80,6 +80,7 @@ export function TimePage() {
                           className={`w-12 bg-transparent px-1 py-1.5 text-center outline-none focus:bg-copper-soft ${locked ? 'bg-paper text-muted' : ''}`}
                           defaultValue={day?.[t] || ''}
                           disabled={locked}
+                          aria-label={`${emp.employee_name}, ${job.job_code}, ${DAYS[dates.indexOf(date)]} ${t.toUpperCase()}`}
                           title={locked ? 'Billed — locked' : `${emp.employee_name}, ${job.job_code}, ${date} ${t.toUpperCase()}`}
                           onBlur={(e) => {
                             const v = Number(e.target.value) || 0;

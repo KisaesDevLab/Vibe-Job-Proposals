@@ -13,6 +13,29 @@ async function markupMap(customerId: string) {
   return Object.fromEntries(rows.map((r) => [r.category, Number(r.percent)]));
 }
 
+function csvEscape(v: unknown): string {
+  return `"${String(v ?? '').replace(/"/g, '""')}"`;
+}
+
+// CSV export (must precede '/:id'). Phase 6 task 21.
+customersRouter.get(
+  '/export/csv',
+  ah(async (_req, res) => {
+    const rows = await db.select().from(customers).orderBy(asc(customers.name));
+    const header = 'name,address1,city,state,zip,contact_name,contact_email,contact_phone,active\n';
+    const csv =
+      header +
+      rows
+        .map((c) =>
+          [c.name, c.billToAddress1, c.billToCity, c.billToState, c.billToZip, c.contactName, c.contactEmail, c.contactPhone, c.active]
+            .map(csvEscape)
+            .join(','),
+        )
+        .join('\n');
+    res.type('text/csv').attachment('customers.csv').send(csv);
+  }),
+);
+
 customersRouter.get(
   '/',
   ah(async (req, res) => {
