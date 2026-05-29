@@ -29,7 +29,8 @@
     "db:seed": "tsx packages/db/src/seed.ts",
     "db:reset": "tsx packages/db/src/reset.ts",
     "bootstrap": "tsx scripts/bootstrap-admin.ts",
-    "import:xlsm": "tsx scripts/import-xlsm.ts"
+    "import:xlsm": "tsx scripts/import-xlsm.ts",
+    "smoke": "tsx scripts/smoke.ts"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

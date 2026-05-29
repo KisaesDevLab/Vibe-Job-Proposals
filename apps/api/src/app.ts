@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import express from 'express';
 import session from 'express-session';
 import RedisStore from 'connect-redis';
@@ -81,6 +83,16 @@ export function createApp(): express.Express {
   app.use('/api/reports', reportsRouter);
 
   app.use('/api', (_req, res) => res.status(404).json(fail('not_found', 'Route not found')));
+
+  // In production, serve the built SPA and fall back to index.html for client routes.
+  if (isProd) {
+    const webDist = join(process.cwd(), 'apps', 'web', 'dist');
+    if (existsSync(webDist)) {
+      app.use(express.static(webDist));
+      app.get('*', (_req, res) => res.sendFile(join(webDist, 'index.html')));
+    }
+  }
+
   app.use(errorHandler);
   return app;
 }
