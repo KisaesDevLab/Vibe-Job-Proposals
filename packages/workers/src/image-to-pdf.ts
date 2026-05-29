@@ -10,30 +10,33 @@ import { connection, logger } from './connection.js';
 
 const A4 = { w: 595.28, h: 841.89 }; // points
 
-async function convert(attachmentId: string): Promise<void> {
+/**
+ * Pure core: normalize + auto-rotate an image buffer and embed it into a
+ * single-page A4 PDF at native size (max 80% of the page). Testable without DB.
+ */
+export async function imageBufferToPdf(input: Buffer): Promise<Uint8Array> {
   const sharp = (await import('sharp')).default;
+  const png = await sharp(input).rotate().png().toBuffer();
+  const meta = await sharp(png).metadata();
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([A4.w, A4.h]);
+  const embedded = await pdf.embedPng(png);
+  const iw = meta.width ?? embedded.width;
+  const ih = meta.height ?? embedded.height;
+  const scale = Math.min((A4.w * 0.8) / iw, (A4.h * 0.8) / ih, 1);
+  const w = iw * scale;
+  const h = ih * scale;
+  page.drawImage(embedded, { x: (A4.w - w) / 2, y: (A4.h - h) / 2, width: w, height: h });
+  return pdf.save();
+}
+
+async function convert(attachmentId: string): Promise<void> {
   const [att] = await db.select().from(expenseAttachments).where(eq(expenseAttachments.id, attachmentId));
   if (!att) throw new Error(`attachment ${attachmentId} not found`);
   const src = att.storedPath;
   if (!existsSync(src)) throw new Error(`source missing ${src}`);
 
-  // normalize + auto-rotate -> PNG buffer
-  const img = sharp(readFileSync(src)).rotate();
-  const png = await img.png().toBuffer();
-  const meta = await sharp(png).metadata();
-
-  const pdf = await PDFDocument.create();
-  const page = pdf.addPage([A4.w, A4.h]);
-  const embedded = await pdf.embedPng(png);
-  const maxW = A4.w * 0.8;
-  const maxH = A4.h * 0.8;
-  const iw = meta.width ?? embedded.width;
-  const ih = meta.height ?? embedded.height;
-  const scale = Math.min(maxW / iw, maxH / ih, 1);
-  const w = iw * scale;
-  const h = ih * scale;
-  page.drawImage(embedded, { x: (A4.w - w) / 2, y: (A4.h - h) / 2, width: w, height: h });
-  const bytes = await pdf.save();
+  const bytes = await imageBufferToPdf(readFileSync(src));
 
   const finalDir = dirname(dirname(src)); // .../expenses/{id}/_pending -> .../expenses/{id}
   const finalPath = join(finalDir, `${attachmentId}.pdf`);

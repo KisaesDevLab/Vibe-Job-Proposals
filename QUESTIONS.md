@@ -105,3 +105,30 @@ single-process automated script (`scripts/smoke.ts`) that boots the API + BullMQ
 in-process and drives the entire lifecycle over real HTTP. This is how the build verifies
 the app (the sandbox kills detached servers). `docs/SMOKETEST.md` documents the manual
 steps; `npm run smoke` runs the automated equivalent.
+
+### Q3.1 — Docx dotted-placeholder parser (bug found by added tests)
+docxtemplater's default parser does not traverse nested objects, so `{invoice.number}`,
+`{company.name}`, `{totals.grand_total}` rendered EMPTY in real invoices (only flat
+loop keys worked). CLAUDE.md Phase 14 task 5 calls for the angular-parser.
+**Decision:** Add a dependency-free custom `parser` (`dottedParser` in render-docx.ts)
+that resolves dotted paths and falls back to the root scope inside loops. Verified by a
+new render unit test and a scalar-content guard in the smoke test.
+**Files:** `packages/workers/src/render-docx.ts` (+ test), `scripts/smoke.ts`.
+
+### Q3.2 — Docker image build not verifiable in this environment
+`dockerd` starts here, and both compose files validate (`docker compose config`), but the
+image build cannot complete: Docker Hub rejects base-image pulls with an unauthenticated
+**pull-rate-limit** (429/403). This is an environment/network constraint, not a Dockerfile
+defect. The Dockerfile, entrypoint, and prod compose are authored to spec; the `# syntax`
+frontend directive was removed (it required a blocked registry fetch).
+**Decision:** Verified as far as the environment allows (daemon up, compose config valid);
+documented the limitation rather than claiming a successful image build.
+**Files:** `docker/Dockerfile`, `docker/docker-compose*.yml`.
+
+### Q3.3 — Test coverage vs. per-phase prescription
+The phases prescribe many more unit/e2e tests than implemented. Added a substantive
+supertest **integration suite** (auth/401/CSRF, gist exclusion constraint, full
+draft→finalize with snapshot==preview, one-draft-per-job, void unbind + sequence-not-
+reused, markup-blocked-after-finalize, time upsert delete, markup precedence) plus
+image-to-pdf and docx-render unit tests. Playwright e2e remains out of scope for this
+pass; DB-gated tests run in CI (where DATABASE_URL is set) and skip on the unit-only gate.

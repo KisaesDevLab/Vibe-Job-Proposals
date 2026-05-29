@@ -10,6 +10,20 @@ import { connection, logger, STORAGE } from './connection.js';
 import { buildInvoiceData } from './invoice-data.js';
 import { enqueueDocxToPdf } from './queues.js';
 
+// Resolves dotted tags (e.g. {invoice.number}, {totals.grand_total}) as well as
+// simple keys within loop scopes. Replaces the default parser, which does not
+// traverse nested objects (CLAUDE.md Phase 14 task 5).
+export const dottedParser = (tag: string) => ({
+  get(scope: any, ctx: any) {
+    if (tag === '.') return scope;
+    const fromScope = tag.split('.').reduce((s: any, k: string) => (s == null ? undefined : s[k]), scope);
+    if (fromScope !== undefined) return fromScope;
+    // fall back to the root scope for top-level dotted tags used inside a loop
+    const root = ctx?.scopeList?.[0];
+    return tag.split('.').reduce((s: any, k: string) => (s == null ? undefined : s[k]), root);
+  },
+});
+
 async function render(invoiceId: string): Promise<void> {
   const [settings] = await sql<any[]>`SELECT template_docx_path FROM settings WHERE id=1`;
   const templatePath = settings?.template_docx_path;
@@ -21,6 +35,7 @@ async function render(invoiceId: string): Promise<void> {
   const doc = new Docxtemplater(zip, {
     paragraphLoop: true,
     linebreaks: true,
+    parser: dottedParser,
     nullGetter: () => '', // missing placeholders render empty
   });
   doc.render(data);

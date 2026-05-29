@@ -25,7 +25,7 @@ the full lifecycle over HTTP. Mirrors the manual checklist in `docs/SMOKETEST.md
 ## Green gate
 - `npm run type-check` — ✅ clean
 - `npm run lint` — ✅ clean
-- `npm test` — ✅ 28 passed (3 DB-integration tests run in CI where `DATABASE_URL` is set)
+- `npm test` — ✅ 43 passed (8 supertest API integration, image-to-pdf, docx render, pricing, importer); DB-gated suites run in CI
 
 ## Pricing verification
 8h ST + 4h OT @ $110/$165 + 8h ST = 16×110 + 4×165 + ... and a $425.50 materials expense

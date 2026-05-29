@@ -119,7 +119,13 @@ async function main() {
   writeFileSync('/tmp/smoke-invoice.pdf', pdfBuf);
   if (pdfBuf.subarray(0, 5).toString() !== '%PDF-') throw new Error('pdf invalid');
   if (docxBuf.subarray(0, 2).toString() !== 'PK') throw new Error('docx invalid');
-  log(`downloaded docx (${docxBuf.length}b) + pdf (${pdfBuf.length}b)`);
+  // guard against the dotted-placeholder regression: scalars must render into the docx
+  const { default: PizZip } = await import('pizzip');
+  const docXmlText = new PizZip(docxBuf).file('word/document.xml')!.asText().replace(/<[^>]+>/g, '');
+  for (const needle of [fin.billed_reference, 'Smoke Co', '$2,909.33']) {
+    if (!docXmlText.includes(needle)) throw new Error(`docx missing rendered value "${needle}" (placeholder regression)`);
+  }
+  log(`downloaded docx (${docxBuf.length}b) + pdf (${pdfBuf.length}b); scalars rendered`);
 
   const r1 = await call('GET', `/reports/employee-hours?job_id=${job.id}`);
   const r2 = await call('GET', `/reports/time-detail?job_id=${job.id}`);
