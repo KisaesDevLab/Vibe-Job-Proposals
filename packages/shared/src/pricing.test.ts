@@ -57,6 +57,17 @@ describe('priceTimeEntry', () => {
     const r = priceTimeEntry({ st_hours: 1.33, ot_hours: 0, dt_hours: 0 }, { rate_1x: 99.99, rate_15x: 0, rate_2x: 0 }, cost);
     expect(r.total).toBe(132.99); // 1.33 * 99.99 = 132.9867 -> 132.99
   });
+  it('treats missing hours/rate/cost fields as zero (nullish fallbacks)', () => {
+    // hours present but rate + cost fields undefined -> amount/cost 0
+    const r = priceTimeEntry(
+      { st_hours: 5, ot_hours: undefined as any, dt_hours: undefined as any },
+      {} as any,
+      {} as any,
+    );
+    expect(r.tiers).toHaveLength(1);
+    expect(r.total).toBe(0);
+    expect(r.totalCost).toBe(0);
+  });
 });
 
 describe('priceExpenseEntry', () => {
@@ -68,6 +79,12 @@ describe('priceExpenseEntry', () => {
     const r = priceExpenseEntry({ category: 'freight', amount: 50 }, 0);
     expect(r.markup_amount).toBe(0);
     expect(r.total).toBe(50);
+  });
+  it('treats null amount / percent as zero (nullish fallbacks)', () => {
+    const r = priceExpenseEntry({ category: 'materials', amount: null as any }, null as any);
+    expect(r.amount).toBe(0);
+    expect(r.markup_percent).toBe(0);
+    expect(r.total).toBe(0);
   });
 });
 

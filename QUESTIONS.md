@@ -132,3 +132,47 @@ draft→finalize with snapshot==preview, one-draft-per-job, void unbind + sequen
 reused, markup-blocked-after-finalize, time upsert delete, markup precedence) plus
 image-to-pdf and docx-render unit tests. Playwright e2e remains out of scope for this
 pass; DB-gated tests run in CI (where DATABASE_URL is set) and skip on the unit-only gate.
+
+---
+
+## Exhaustive phase audit (post-v1.0.0)
+
+### Q4.1 — dump.rdb committed by accident
+Redis (run with `--daemonize` from the repo cwd in dev) wrote `dump.rdb` into the repo and
+it got committed. **Fixed:** untracked + added `dump.rdb`/`*.rdb` to `.gitignore`.
+
+### Q4.2 — Phase gaps found by the endpoint audit (scripts/audit.ts) and fixed
+- Phase 6 customers CSV export; Phase 8 jobs CSV export (both were missing).
+- Phase 10: expense `work_date` >30 days in the future now rejected; first-page PNG
+  thumbnail endpoint (`/attachments/:id/preview`, gs+graphicsmagick via pdf2pic) added.
+- Phase 14: example-template download endpoint + UI link + placeholder viewer.
+- Phase 17: SMTP save endpoint (AES-256-GCM, password redacted from GET) + test-connect +
+  Settings Email sub-section.
+- Phase 9: aria-labels on time-grid cells.
+- Phase 11: added nullish-branch tests to reach the required **100% branch coverage** on
+  the pricing module (installed `@vitest/coverage-v8`).
+- Phase 4/5/7: added integration tests for FK-guarded rate-level delete and half-open
+  `[from,to)` boundary semantics of getRateAt/getCostRateAt + cost-rate auto-close.
+
+### Q4.3 — CORS not configured (Phase 1 task 9)
+**Decision:** Omit a CORS middleware. In dev the SPA is served by the Vite dev server which
+**proxies** `/api` to the API (same-origin); in prod the API serves the built SPA itself
+(same-origin). No cross-origin requests occur, so CORS headers are unnecessary. Adding the
+documented `localhost:5173` allowance would only matter if running the SPA without the
+proxy, which we don't.
+
+### Q4.4 — shadcn/ui not used (Phase 1 task 6)
+**Decision:** Reproduced the mockup's look with hand-written Tailwind component classes
+(`.btn`, `.card`, `.input`, `Badge`, `Modal`, …) instead of scaffolding shadcn/ui. The
+visual result matches the charcoal+copper mockup; shadcn would add generated boilerplate
+without changing behavior. Logged as a deliberate deviation.
+
+### Q4.5 — husky + lint-staged added
+Added (Phase 1 task 5): `.husky/pre-commit` runs `lint-staged` (eslint, max-warnings 0) on
+staged `*.{ts,tsx}`; `prepare: husky || true` keeps `npm ci` safe in non-git/Docker
+contexts.
+
+### Q4.6 — Docker image build (revisited)
+`dockerd` runs in this environment and both compose files validate, but base-image pulls
+hit Docker Hub's unauthenticated rate limit, so a full `docker build` still cannot complete
+here. Unchanged from Q3.2 — an environment constraint, not a defect.

@@ -30,24 +30,31 @@
     "db:reset": "tsx packages/db/src/reset.ts",
     "bootstrap": "tsx scripts/bootstrap-admin.ts",
     "import:xlsm": "tsx scripts/import-xlsm.ts",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "prepare": "husky || true"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^7.13.0",
     "@typescript-eslint/parser": "^7.13.0",
+    "@vitest/coverage-v8": "^1.6.1",
+    "bcryptjs": "^2.4.3",
     "concurrently": "^8.2.2",
+    "drizzle-orm": "^0.31.2",
     "eslint": "^8.57.0",
     "eslint-plugin-react": "^7.34.2",
     "eslint-plugin-react-hooks": "^4.6.2",
+    "exceljs": "^4.4.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
+    "postgres": "^3.4.4",
     "prettier": "^3.3.2",
     "tsx": "^4.15.6",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0",
-    "drizzle-orm": "^0.31.2",
-    "postgres": "^3.4.4",
-    "bcryptjs": "^2.4.3",
-    "exceljs": "^4.4.0",
-    "@types/bcryptjs": "^2.4.6"
+    "vitest": "^1.6.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": "eslint --max-warnings=0"
   }
 }

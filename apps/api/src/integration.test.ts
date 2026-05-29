@@ -147,6 +147,51 @@ d('API integration', () => {
     expect(detail.preview.expense_lines[0].markup_source).toBe('customer');
   });
 
+  // ---- Phase 4: FK-guarded delete ----
+  it('blocks deleting a rate level that is referenced by an employee (409)', async () => {
+    const lvl = (await H(agent.post('/api/rate-levels')).send({ name: `Ref ${suffix}` })).body.data;
+    await H(agent.post('/api/employees')).send({ name: `RefEmp ${suffix}`, level_id: lvl.id });
+    const del = await H(agent.del(`/api/rate-levels/${lvl.id}`)).send({});
+    expect(del.status).toBe(409);
+    expect(del.body.error.details.count).toBeGreaterThan(0);
+  });
+
+  // ---- Phases 5/7: half-open [from,to) interval semantics ----
+  it('getRateAt / getCostRateAt honor half-open intervals at the boundary', async () => {
+    const { getRateAt, getCostRateAt } = await import('./services/lookup.js');
+    const [lvl] = await sql`SELECT id FROM rate_levels WHERE name='Journeyman'`;
+    const cust = (await H(agent.post('/api/customers')).send({ name: `Bnd ${suffix}`, bill_to_address1: '1', bill_to_city: 'J', bill_to_state: 'MO', bill_to_zip: '64801' })).body.data;
+    // closed schedule window [2024-01-01, 2024-07-01)
+    const sched = (await H(agent.post(`/api/customers/${cust.id}/rate-schedules`)).send({ name: 'W', effective_from: '2024-01-01', effective_to: '2024-07-01' })).body.data;
+    await H(agent.post(`/api/rate-schedules/${sched.id}/lines/bulk`)).send([{ level_id: lvl.id, rate_1x: 50, rate_15x: 75, rate_2x: 100 }]);
+
+    const inside = await getRateAt(cust.id, lvl.id, '2024-06-30');
+    expect('rate_1x' in inside && inside.rate_1x).toBe(50);
+    const onFrom = await getRateAt(cust.id, lvl.id, '2024-01-01'); // inclusive
+    expect('rate_1x' in onFrom).toBe(true);
+    const onTo = await getRateAt(cust.id, lvl.id, '2024-07-01'); // exclusive -> no schedule
+    expect('error' in onTo && onTo.error).toBe('no_schedule');
+
+    const emp = (await H(agent.post('/api/employees')).send({ name: `Bnd Emp ${suffix}`, level_id: lvl.id })).body.data;
+    await H(agent.post(`/api/employees/${emp.id}/cost-rates`)).send({ effective_from: '2024-01-01', cost_st: 30, cost_ot: 45, cost_dt: 60 });
+    const costBefore = await getCostRateAt(emp.id, '2023-12-31');
+    expect('error' in costBefore && costBefore.error).toBe('no_cost_rate');
+    const costOn = await getCostRateAt(emp.id, '2024-01-01');
+    expect('cost_st' in costOn && costOn.cost_st).toBe(30);
+  });
+
+  // ---- Phase 5: adding a new cost rate auto-closes the prior open one ----
+  it('auto-closes the prior open cost rate when adding a new one', async () => {
+    const [lvl] = await sql`SELECT id FROM rate_levels WHERE name='Journeyman'`;
+    const emp = (await H(agent.post('/api/employees')).send({ name: `AC ${suffix}`, level_id: lvl.id })).body.data;
+    await H(agent.post(`/api/employees/${emp.id}/cost-rates`)).send({ effective_from: '2024-01-01', cost_st: 30, cost_ot: 45, cost_dt: 60 });
+    await H(agent.post(`/api/employees/${emp.id}/cost-rates`)).send({ effective_from: '2024-06-01', cost_st: 35, cost_ot: 52, cost_dt: 70 });
+    const rows = await sql`SELECT effective_from::text f, effective_to::text t FROM employee_cost_rates WHERE employee_id=${emp.id} ORDER BY effective_from`;
+    expect(rows.length).toBe(2);
+    expect(rows[0].t).toBe('2024-06-01'); // prior closed at the new from
+    expect(rows[1].t).toBeNull(); // new one open-ended
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');
