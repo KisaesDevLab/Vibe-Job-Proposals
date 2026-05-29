@@ -1,0 +1,163 @@
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
+import { ArrowLeft, Download, FileText, Ban, RefreshCw } from 'lucide-react';
+import { api } from '@/lib/api';
+import { formatMoney } from '@darrow/shared';
+import { Skeleton, Badge, Modal, toast } from '@/components/ui';
+
+export function InvoiceDetailPage({ id }: { id: string }) {
+  const nav = useNavigate();
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ['invoice', id],
+    queryFn: () => api.get<any>(`/invoices/${id}`),
+    refetchInterval: (q) => {
+      const inv = q.state.data?.invoice;
+      return inv && (inv.docx_status === 'pending' || inv.pdf_status === 'pending') ? 3000 : false;
+    },
+  });
+  const [voiding, setVoiding] = useState(false);
+
+  const finalize = useMutation({
+    mutationFn: () => api.post(`/invoices/${id}/finalize`),
+    onSuccess: () => { toast('Invoice finalized'); qc.invalidateQueries({ queryKey: ['invoice', id] }); },
+    onError: (e: any) => toast(e.details ? `Blocked: ${e.details.map((b: any) => b.message).join('; ')}` : e.message, 'err'),
+  });
+
+  if (isLoading) return <Skeleton rows={8} />;
+  const inv = data.invoice;
+  const isDraft = inv.status === 'draft';
+
+  return (
+    <div>
+      <button className="btn-ghost mb-4" onClick={() => nav({ to: '/invoices' })}><ArrowLeft size={16} /> Invoices</button>
+      <div className="mb-6 flex items-start justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold">{inv.billed_reference ?? 'Draft Invoice'}</h1>
+            <Badge status={inv.status}>{inv.status}</Badge>
+          </div>
+          <p className="mt-1 text-sm text-muted">{inv.job_code} · {inv.customer_name} · through {inv.through_date}</p>
+        </div>
+        <div className="flex gap-2">
+          {isDraft && <button className="btn-primary" onClick={() => finalize.mutate()} disabled={finalize.isPending || (data.preview?.blockers?.length > 0)}>Finalize</button>}
+          {!isDraft && inv.status !== 'void' && (
+            <>
+              <a className="btn-ghost" href={`/api/invoices/${id}/docx`}><FileText size={15} /> DOCX</a>
+              <a className="btn-ghost" href={`/api/invoices/${id}/pdf`}><Download size={15} /> PDF</a>
+              <button className="btn-ghost" onClick={() => api.post(`/invoices/${id}/regenerate`).then(() => { toast('Regenerating'); qc.invalidateQueries({ queryKey: ['invoice', id] }); })}><RefreshCw size={15} /></button>
+              <button className="btn-danger" onClick={() => setVoiding(true)}><Ban size={15} /> Void</button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {isDraft ? <DraftView id={id} data={data} /> : <SnapshotView inv={inv} lines={data.line_items} />}
+
+      {voiding && <VoidModal id={id} reference={inv.billed_reference} onClose={() => setVoiding(false)} onVoided={() => { setVoiding(false); qc.invalidateQueries({ queryKey: ['invoice', id] }); }} />}
+    </div>
+  );
+}
+
+function DraftView({ data }: { id: string; data: any }) {
+  const p = data.preview;
+  return (
+    <div className="grid grid-cols-3 gap-6">
+      <div className="col-span-2 space-y-4">
+        {p?.blockers?.length > 0 && (
+          <div className="rounded-lg bg-red-soft p-3 text-sm text-red">
+            <div className="font-semibold">Finalize blocked:</div>
+            <ul className="list-disc pl-5">{p.blockers.map((b: any, i: number) => <li key={i}>{b.message}</li>)}</ul>
+          </div>
+        )}
+        <div className="card overflow-hidden">
+          <div className="border-b border-line px-4 py-2 text-sm font-semibold">Labor ({p?.labor_lines?.length ?? 0})</div>
+          <table className="w-full text-sm">
+            <tbody>
+              {p?.labor_lines?.map((l: any, i: number) => (
+                <tr key={i}><td className="td">{l.employee_name}</td><td className="td">{l.tier_label}</td><td className="td">{l.hours} hrs</td><td className="td">{formatMoney(l.rate)}</td><td className="td text-right">{formatMoney(l.amount)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="card overflow-hidden">
+          <div className="border-b border-line px-4 py-2 text-sm font-semibold">Expenses ({p?.expense_lines?.length ?? 0})</div>
+          <table className="w-full text-sm">
+            <tbody>
+              {p?.expense_lines?.map((l: any, i: number) => (
+                <tr key={i}><td className="td">{l.category_label}</td><td className="td">{l.vendor}</td><td className="td">{formatMoney(l.amount)}</td><td className="td">+{formatMoney(l.markup_amount)} <span className="text-xs text-muted">({l.markup_source})</span></td><td className="td text-right">{formatMoney(l.total)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="card h-fit p-4">
+        <div className="mb-2 text-sm font-semibold">Preview Totals</div>
+        <Totals t={p?.totals} />
+      </div>
+    </div>
+  );
+}
+
+function SnapshotView({ inv, lines }: { inv: any; lines: any[] }) {
+  return (
+    <div className="grid grid-cols-3 gap-6">
+      <div className="col-span-2 card overflow-hidden">
+        <table className="w-full text-sm">
+          <tbody>
+            {lines.map((l) => (
+              <tr key={l.id} className={l.lineType.includes('subtotal') || l.lineType === 'grand_total' ? 'font-semibold' : ''}>
+                <td className="td">{l.description}</td>
+                <td className="td">{l.quantity ? `${l.quantity} @ ${formatMoney(l.unitRate)}` : ''}</td>
+                <td className="td text-right">{formatMoney(l.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="card h-fit p-4">
+        <div className="mb-2 text-sm font-semibold">Status</div>
+        <div className="space-y-1 text-sm">
+          <div className="flex justify-between"><span className="text-muted">DOCX</span><Badge status={inv.docx_status ?? 'pending'}>{inv.docx_status ?? '—'}</Badge></div>
+          <div className="flex justify-between"><span className="text-muted">PDF</span><Badge status={inv.pdf_status ?? 'pending'}>{inv.pdf_status ?? '—'}</Badge></div>
+          {inv.generation_error && <div className="rounded bg-red-soft p-2 text-xs text-red">{inv.generation_error}</div>}
+        </div>
+        <div className="mt-4 mb-2 text-sm font-semibold">Totals</div>
+        <Totals t={{ total_labor: inv.total_labor, total_markup: inv.total_markup, grand_total: inv.grand_total }} />
+      </div>
+    </div>
+  );
+}
+
+function Totals({ t }: { t: any }) {
+  if (!t) return null;
+  return (
+    <div className="space-y-1 text-sm">
+      <Row label="Labor" v={t.total_labor} />
+      {t.total_materials != null && <Row label="Materials" v={t.total_materials} />}
+      {t.total_markup != null && <Row label="Markup" v={t.total_markup} />}
+      <div className="my-1 border-t border-line" />
+      <Row label="Grand Total" v={t.grand_total} bold />
+    </div>
+  );
+}
+function Row({ label, v, bold }: { label: string; v: any; bold?: boolean }) {
+  return <div className={`flex justify-between ${bold ? 'font-bold text-base' : ''}`}><span className={bold ? '' : 'text-muted'}>{label}</span><span>{formatMoney(v ?? 0)}</span></div>;
+}
+
+function VoidModal({ id, reference, onClose, onVoided }: { id: string; reference: string; onClose: () => void; onVoided: () => void }) {
+  const [confirm, setConfirm] = useState('');
+  const [reason, setReason] = useState('');
+  const m = useMutation({ mutationFn: () => api.post(`/invoices/${id}/void`, { reason }), onSuccess: () => { toast('Voided'); onVoided(); }, onError: (e: any) => toast(e.message, 'err') });
+  return (
+    <Modal open onClose={onClose} title="Void Invoice">
+      <div className="space-y-3">
+        <p className="text-sm text-muted">Type <span className="font-mono font-semibold">{reference}</span> to confirm. Entries will be unbound and re-billable.</p>
+        <input className="input" placeholder="Invoice number" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+        <input className="input" placeholder="Reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+        <div className="flex justify-end gap-2"><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-danger" disabled={confirm !== reference || !reason || m.isPending} onClick={() => m.mutate()}>Void invoice</button></div>
+      </div>
+    </Modal>
+  );
+}
