@@ -14,6 +14,7 @@ import { startImageToPdfWorker } from '../packages/workers/src/image-to-pdf.js';
 import { startRenderDocxWorker } from '../packages/workers/src/render-docx.js';
 import { startDocxToPdfWorker } from '../packages/workers/src/docx-to-pdf.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import sharpLib from 'sharp';
 
 const PORT = 4137;
@@ -73,6 +74,18 @@ async function main() {
 
   await call('POST', '/auth/login', { username: 'admin', password: pw });
   log('logged in');
+
+  // Upload the starter invoice template so generation is self-contained
+  // (SMOKETEST step 2). Without a template, render-docx has nothing to render.
+  const tpl = join(process.cwd(), 'docs', 'example-template.docx');
+  if (existsSync(tpl)) {
+    const tfd = new FormData();
+    tfd.append('file', new Blob([readFileSync(tpl)], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), 'template.docx');
+    const tr = await fetch(`${BASE}/settings/template`, { method: 'POST', headers: { 'X-Requested-With': 'darrow', cookie }, body: tfd });
+    if (!(await tr.json()).ok) throw new Error('template upload failed');
+    await call('PUT', '/settings', { company_name: 'Darrow Electric', address_line1: '100 Voltage Way', city: 'Joplin', state: 'MO', zip: '64801', phone: '4175550100', email: 'billing@darrow.test' });
+    log('uploaded invoice template + company settings');
+  }
 
   const suffix = Date.now().toString().slice(-6);
   const cust = await call('POST', '/customers', { name: `Smoke Co ${suffix}`, bill_to_address1: '1 Main', bill_to_city: 'Joplin', bill_to_state: 'MO', bill_to_zip: '64801' });

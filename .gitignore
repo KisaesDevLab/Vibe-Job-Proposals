@@ -19,3 +19,4 @@ dump.rdb
 *.rdb
 
 .husky/_/
+.storage/
