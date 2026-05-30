@@ -18,6 +18,7 @@ services:
       NODE_ENV: production
       LOG_LEVEL: info
       SMTP_ENC_KEY: ${SMTP_ENC_KEY:-}
+      PUBLIC_UPLOAD_TOKEN: ${PUBLIC_UPLOAD_TOKEN:-}
     ports: ['3000:3000']
     volumes: ['storage:/storage']
     healthcheck:

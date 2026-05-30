@@ -14,6 +14,7 @@ import { AuthProvider } from './lib/auth';
 import { api } from './lib/api';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/Login';
+import { PublicUploadPage } from './pages/PublicUpload';
 import { TimePage } from './pages/Time';
 import { ExpensesPage } from './pages/Expenses';
 import { InvoicesPage } from './pages/Invoices';
@@ -41,6 +42,9 @@ async function requireAuth() {
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
 
 const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: '/login', component: LoginPage });
+
+// Public, no-login bill upload page (token-gated) — outside the auth guard.
+const uploadRoute = createRoute({ getParentRoute: () => rootRoute, path: '/upload', component: PublicUploadPage });
 
 const appRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -74,6 +78,7 @@ const settingsRoute = createRoute({ getParentRoute: () => appRoute, path: '/sett
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  uploadRoute,
   appRoute.addChildren([
     indexRoute,
     timeRoute,

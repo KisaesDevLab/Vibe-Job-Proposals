@@ -11,6 +11,7 @@ import { errorHandler } from './error-handler.js';
 import { requireAuth } from './middleware/auth.js';
 import { healthRouter } from './routes/health.js';
 import { authRouter } from './routes/auth.js';
+import { publicRouter } from './routes/public.js';
 import { auditRouter } from './routes/audit.js';
 import { settingsRouter } from './routes/settings.js';
 import { rateLevelsRouter } from './routes/rate-levels.js';
@@ -54,8 +55,14 @@ export function createApp(): express.Express {
   );
 
   // CSRF defense: custom header required on mutating requests (Phase 20 task 18).
+  // The public upload endpoints are sessionless + token-gated, so cookie-CSRF
+  // doesn't apply — exempt them so non-SPA clients aren't blocked.
   app.use((req, res, next) => {
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !req.path.startsWith('/api/auth/login')) {
+    if (
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) &&
+      !req.path.startsWith('/api/auth/login') &&
+      !req.path.startsWith('/api/public/')
+    ) {
       if (req.get('x-requested-with') !== 'darrow') {
         // Allow same-origin form posts for file uploads via multipart only if header present.
         return res.status(403).json(fail('csrf', 'Missing X-Requested-With header'));
@@ -66,6 +73,7 @@ export function createApp(): express.Express {
 
   app.use('/api/health', healthRouter);
   app.use('/api/auth', authRouter);
+  app.use('/api/public', publicRouter); // sessionless, token-gated; before requireAuth
 
   // everything below requires auth
   app.use('/api', requireAuth);

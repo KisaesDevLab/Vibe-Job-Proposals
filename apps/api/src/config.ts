@@ -12,6 +12,7 @@ const schema = z.object({
   LIBREOFFICE_BIN: z.string().default('/usr/bin/libreoffice'),
   PORT: z.coerce.number().default(4000),
   SMTP_ENC_KEY: z.string().optional(),
+  PUBLIC_UPLOAD_TOKEN: z.string().optional(),
 });
 
 export type Config = z.infer<typeof schema>;

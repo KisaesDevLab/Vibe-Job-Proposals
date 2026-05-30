@@ -283,6 +283,35 @@ d('API integration', () => {
     expect(del.status).toBe(200);
   });
 
+  // ---- Public (no-login) bill upload, token-gated ----
+  it('accepts a no-login upload with a valid token and rejects without it', async () => {
+    const { PDFDocument } = await import('pdf-lib');
+    const pdf = await PDFDocument.create();
+    pdf.addPage([200, 200]);
+    const pdfBuf = Buffer.from(await pdf.save());
+    const token = process.env.PUBLIC_UPLOAD_TOKEN ?? '';
+
+    // no token -> 401 (note: no session cookie, no CSRF header needed)
+    const noTok = await request(app).post('/api/public/upload').attach('files', pdfBuf, 'b.pdf');
+    expect(noTok.status).toBe(401);
+
+    // valid token -> 201, no login
+    const up = await request(app)
+      .post(`/api/public/upload?k=${encodeURIComponent(token)}`)
+      .field('job_code', `D26PUB${suffix}`)
+      .field('notes', 'dropped at the shop')
+      .attach('files', pdfBuf, 'b.pdf');
+    expect(up.status).toBe(201);
+    expect(up.body.data.created).toBe(1);
+
+    // it lands in the admin inbox with the job code + notes + source=public
+    const list = (await agent.get('/api/inbox')).body.data;
+    const doc = list.find((d: any) => d.submitted_job_code === `D26PUB${suffix}`);
+    expect(doc).toBeTruthy();
+    expect(doc.notes).toBe('dropped at the shop');
+    expect(doc.source).toBe('public');
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');

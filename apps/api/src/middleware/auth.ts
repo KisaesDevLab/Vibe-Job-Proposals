@@ -13,7 +13,7 @@ export interface AuthedRequest extends Request {
   user?: { id: string; username: string; role: 'admin' | 'owner' };
 }
 
-const WHITELIST = [/^\/api\/health$/, /^\/api\/auth\/login$/, /^\/api\/auth\/me$/, /^\/api\/auth\/logout$/];
+const WHITELIST = [/^\/api\/health$/, /^\/api\/auth\/login$/, /^\/api\/auth\/me$/, /^\/api\/auth\/logout$/, /^\/api\/public\//];
 
 export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): Promise<void> {
   if (WHITELIST.some((re) => re.test(req.path))) return next();

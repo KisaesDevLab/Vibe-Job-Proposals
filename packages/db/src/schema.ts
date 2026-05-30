@@ -339,6 +339,9 @@ export const inboxDocuments = pgTable('inbox_documents', {
   fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
   status: attachmentStatus('status').notNull().default('pending'),
   retryCount: integer('retry_count').notNull().default(0),
+  submittedJobCode: text('submitted_job_code'),
+  notes: text('notes'),
+  source: text('source').notNull().default('admin'),
   uploadedByUserId: uuid('uploaded_by_user_id').references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

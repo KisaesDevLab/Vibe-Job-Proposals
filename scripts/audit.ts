@@ -112,6 +112,19 @@ async function main() {
     check('inbox doc removed after processing (download 404)', (await agent.get(`/api/inbox/${docId}/download`)).status === 404);
   }
 
+  // Public (no-login) upload page — token gated
+  const TOKEN = process.env.PUBLIC_UPLOAD_TOKEN ?? '';
+  const pubNoToken = await H(request(app).post('/api/public/upload')).attach('files', pdfBuf, 'pub.pdf');
+  check('public upload without token rejected (401)', pubNoToken.status === 401, `got ${pubNoToken.status}`);
+  check('public token check (valid)', (await request(app).get(`/api/public/upload/check?k=${TOKEN}`)).status === 200);
+  check('public token check (invalid 401)', (await request(app).get('/api/public/upload/check?k=wrong')).status === 401);
+  const pub = await H(request(app).post(`/api/public/upload?k=${encodeURIComponent(TOKEN)}`)).field('job_code', 'D26AUDPUB').field('notes', 'left at front desk').attach('files', pdfBuf, 'pub.pdf');
+  check('public upload with token (201, no login)', pub.status === 201 && pub.body.data.created === 1, `got ${pub.status}`);
+  // it lands in the inbox with the job code + notes + source=public (admin view)
+  const inboxList = (await agent.get('/api/inbox')).body.data;
+  const pubDoc = inboxList.find((d: any) => d.submitted_job_code === 'D26AUDPUB');
+  check('public bill appears in inbox with job code + notes', !!pubDoc && pubDoc.notes === 'left at front desk' && pubDoc.source === 'public');
+
   console.log(`\nAUDIT: ${pass} passed, ${fail} failed`);
   if (fail) console.log('FAILED:\n' + fails.map((f) => '  - ' + f).join('\n'));
   await sql.end();

@@ -242,3 +242,33 @@ the inbox record once processed**, **one expense per file** (v1).
 incl. 7 inbox checks), a live image→PDF worker check, green gate, smoke. All pass.
 **Reuse:** `imageBufferToPdf`, the pdf2pic thumbnail block, `paths.*`, `expenseSchema` +
 future-date guard, `hasHeicSupport`, and the existing upload/polling/thumbnail UI patterns.
+
+---
+
+## Public (no-login) bill upload page (feature request)
+
+### Q8.1 — Employee bill upload without logging in
+Requested a page where employees upload bills without logging in, with optional job code +
+notes. Confirmed decisions: **gated by a secret link/token**, **fields = job code + notes
+only** (no submitter name).
+**Implemented:**
+- Migration `0015_inbox_public_fields.sql` adds `submitted_job_code`, `notes`, `source`
+  (`admin`|`public`) to `inbox_documents`.
+- `PUBLIC_UPLOAD_TOKEN` env var (optional; feature is **disabled when unset**). Passed
+  through in prod compose; documented in `.env.example`.
+- `apps/api/src/routes/public.ts` mounted **before** `requireAuth` (sessionless): token
+  checked with `timingSafeEqual`, rate-limited (40/15min/IP via Redis). `POST
+  /api/public/upload?k=TOKEN` (multi-file + optional `job_code`/`notes`) and a
+  `GET /api/public/upload/check` so the page can show valid-vs-invalid before rendering.
+  Public paths are exempt from the cookie-CSRF header (irrelevant without a session) and
+  whitelisted in the auth middleware.
+- Shared `ingestInboxFile` service refactored out of the authed inbox route so both paths
+  share content-sniffing/storage/enqueue.
+- Standalone SPA route **`/upload`** (outside the auth guard): branded, dropzone +
+  job-code + notes, "invalid/expired link" state, thank-you + upload-more.
+- Admin Inbox surfaces submissions: an "employee" badge + job-code line in the rail, a
+  hint banner with the submitted code/notes, and the entry form **pre-selects the matching
+  job** and pre-fills the description from notes.
+**Verification:** 58 tests (new public integration test: no-token 401, valid-token 201,
+lands in inbox with code/notes/source), `scripts/audit.ts` 37/37 (5 new public checks),
+green gate, smoke. Token compared in constant time; disabled unless configured.

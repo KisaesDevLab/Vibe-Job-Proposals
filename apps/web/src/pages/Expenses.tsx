@@ -123,7 +123,7 @@ function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onCl
   );
 }
 
-interface InboxDoc { id: string; original_filename: string; status: string; file_size_bytes: number; created_at: string; }
+interface InboxDoc { id: string; original_filename: string; status: string; file_size_bytes: number; created_at: string; submitted_job_code?: string | null; notes?: string | null; source?: string; }
 
 function InboxTab() {
   const qc = useQueryClient();
@@ -181,7 +181,11 @@ function InboxTab() {
                 ) : d.status === 'pending' ? <div className="grid h-12 w-9 place-items-center"><Spinner /></div> : <div className="grid h-12 w-9 place-items-center text-red"><Paperclip size={16} /></div>}
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium">{d.original_filename}</div>
-                  <Badge status={d.status}>{d.status}</Badge>
+                  <div className="flex items-center gap-1">
+                    <Badge status={d.status}>{d.status}</Badge>
+                    {d.source === 'public' && <span className="badge bg-blue-soft text-blue">employee</span>}
+                  </div>
+                  {d.submitted_job_code && <div className="truncate font-mono text-xs text-muted">{d.submitted_job_code}</div>}
                 </div>
               </button>
             ))}
@@ -213,8 +217,15 @@ function InboxTab() {
 function InboxEntryForm({ doc, onProcessed, onDeleted }: { doc: InboxDoc; onProcessed: () => void; onDeleted: () => void }) {
   const { data: jobs } = useQuery({ queryKey: ['jobs-active'], queryFn: () => api.get<{ jobs: any[] }>('/jobs?active=true&pageSize=300') });
   const guessVendor = doc.original_filename.replace(/\.[^.]+$/, '').slice(0, 60);
-  const [f, setF] = useState({ work_date: new Date().toISOString().slice(0, 10), job_id: '', vendor: guessVendor, amount: '', category: 'materials', reference: '', description: '' });
+  const [f, setF] = useState({ work_date: new Date().toISOString().slice(0, 10), job_id: '', vendor: guessVendor, amount: '', category: 'materials', reference: '', description: doc.notes ?? '' });
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
+  // Pre-select the job if the employee's submitted code matches an active job.
+  const [matched, setMatched] = useState(false);
+  if (jobs && doc.submitted_job_code && !f.job_id && !matched) {
+    const hit = jobs.jobs.find((j) => j.code.toLowerCase() === doc.submitted_job_code!.trim().toLowerCase());
+    setMatched(true);
+    if (hit) setF((p) => ({ ...p, job_id: hit.id }));
+  }
   const process = useMutation({
     mutationFn: () => api.post(`/inbox/${doc.id}/process`, { ...f, amount: Number(f.amount), reference: f.reference || undefined, description: f.description || undefined }),
     onSuccess: () => { toast('Saved as expense'); onProcessed(); },
@@ -225,6 +236,12 @@ function InboxEntryForm({ doc, onProcessed, onDeleted }: { doc: InboxDoc; onProc
   return (
     <div className="card space-y-3 p-4">
       <div className="text-sm font-semibold">Expense details</div>
+      {(doc.submitted_job_code || doc.notes) && (
+        <div className="rounded-lg bg-blue-soft px-3 py-2 text-xs text-blue">
+          Submitted by employee{doc.submitted_job_code ? <> · job <span className="font-mono font-semibold">{doc.submitted_job_code}</span></> : ''}
+          {doc.notes ? <div className="mt-0.5">“{doc.notes}”</div> : null}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <div><label className="label">Date</label><input type="date" className="input" value={f.work_date} onChange={set('work_date')} /></div>
         <div><label className="label">Amount</label><input className="input" value={f.amount} onChange={set('amount')} /></div>

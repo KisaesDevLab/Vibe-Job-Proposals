@@ -1,9 +1,8 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
-import { writeFileSync, existsSync, createReadStream, copyFileSync, rmSync, renameSync } from 'node:fs';
-import { join, extname, dirname, basename } from 'node:path';
-import { fileTypeFromBuffer } from 'file-type';
+import { existsSync, createReadStream, copyFileSync, rmSync, renameSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
 import { ok, fail, expenseSchema } from '@darrow/shared';
 import { db, inboxDocuments, expenses, expenseAttachments } from '@darrow/db';
 import { eq, desc } from 'drizzle-orm';
@@ -12,13 +11,10 @@ import type { AuthedRequest } from '../middleware/auth.js';
 import { paths } from '../storage.js';
 import { writeAudit } from '../audit.js';
 import { enqueueInboxToPdf } from '../queue.js';
-import { hasHeicSupport } from '../media.js';
+import { ingestInboxFile } from '../services/inbox-ingest.js';
 
 export const inboxRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
-
-const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/webp'];
-const HEIC_MIMES = ['image/heic', 'image/heif'];
 
 // POST /api/inbox — multi-file upload of bills into the processing box.
 inboxRouter.post(
@@ -30,39 +26,9 @@ inboxRouter.post(
     const created: any[] = [];
     const rejected: { filename: string; reason: string }[] = [];
     for (const file of files) {
-      const ft = await fileTypeFromBuffer(file.buffer);
-      const mime = ft?.mime ?? file.mimetype;
-      const isPdf = mime === 'application/pdf';
-      const isImage = IMAGE_MIMES.includes(mime);
-      const isHeic = HEIC_MIMES.includes(mime);
-      if (isHeic && !hasHeicSupport()) {
-        rejected.push({ filename: file.originalname, reason: 'HEIC not supported — share as JPG or PDF' });
-        continue;
-      }
-      if (!isPdf && !isImage && !isHeic) {
-        rejected.push({ filename: file.originalname, reason: `Unsupported file type ${mime}` });
-        continue;
-      }
-      const id = randomUUID();
-      if (isPdf) {
-        const dest = join(paths.inboxDir(id), `${id}.pdf`);
-        writeFileSync(dest, file.buffer, { mode: 0o600 });
-        const [row] = await db
-          .insert(inboxDocuments)
-          .values({ id, originalFilename: file.originalname, storedPath: dest, contentType: mime, fileSizeBytes: file.size, status: 'ready', uploadedByUserId: req.user?.id ?? null })
-          .returning();
-        created.push(row);
-      } else {
-        const ext = (extname(file.originalname) || `.${ft?.ext ?? 'img'}`).toLowerCase();
-        const pendingPath = join(paths.inboxPending(id), `${id}${ext}`);
-        writeFileSync(pendingPath, file.buffer, { mode: 0o600 });
-        const [row] = await db
-          .insert(inboxDocuments)
-          .values({ id, originalFilename: file.originalname, storedPath: pendingPath, contentType: mime, fileSizeBytes: file.size, status: 'pending', uploadedByUserId: req.user?.id ?? null })
-          .returning();
-        await enqueueInboxToPdf(id);
-        created.push(row);
-      }
+      const r = await ingestInboxFile(file, { source: 'admin', uploadedByUserId: req.user?.id ?? null });
+      if (r.row) created.push(r.row);
+      if (r.rejected) rejected.push(r.rejected);
     }
     await writeAudit({ userId: req.user?.id, entityType: 'inbox', entityId: 'batch', action: 'create', summary: `Uploaded ${created.length} bill(s) to inbox` });
     res.status(201).json(ok({ created, rejected }));
@@ -80,6 +46,9 @@ inboxRouter.get(
         content_type: inboxDocuments.contentType,
         file_size_bytes: inboxDocuments.fileSizeBytes,
         status: inboxDocuments.status,
+        submitted_job_code: inboxDocuments.submittedJobCode,
+        notes: inboxDocuments.notes,
+        source: inboxDocuments.source,
         created_at: inboxDocuments.createdAt,
       })
       .from(inboxDocuments)
