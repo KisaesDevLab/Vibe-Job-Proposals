@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Plus, LayoutGrid, User } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -25,14 +25,17 @@ interface JobRow { job_id: string; job_code: string; days: Day[]; }
 interface EmpRow { employee_id: string; employee_name: string; jobs: JobRow[]; }
 
 // Atomic single-cell save: the server reads the other two tiers under a row lock
-// and merges, so rapid edits to sibling tiers can't clobber each other.
-async function saveCell(employee_id: string, job_id: string, date: string, tier: string, value: number): Promise<boolean> {
+// and merges, so rapid edits to sibling tiers can't clobber each other. Returns
+// the server-normalized value for that tier (0 if the row was deleted), or null
+// on error.
+async function saveCell(employee_id: string, job_id: string, date: string, tier: string, value: number): Promise<number | null> {
   try {
-    await api.post('/time/cell', { employee_id, job_id, work_date: date, tier, hours: value });
-    return true;
+    const r: any = await api.post('/time/cell', { employee_id, job_id, work_date: date, tier, hours: value });
+    if (r?.deleted) return 0;
+    return Number(r?.[`${tier}_hours`]) || 0;
   } catch (e: any) {
     toast(e.message, 'err');
-    return false;
+    return null;
   }
 }
 
@@ -59,8 +62,56 @@ export function TimePage() {
   );
 }
 
+// Excel-like weekly grid: controlled cells with a local "edits" overlay so
+// saving/refetching never remounts an input (focus is preserved), plus keyboard
+// navigation — Tab/Shift+Tab across columns, Enter/Arrow-Down to move down,
+// Arrow-Up to move up, and select-on-focus so you can type without clicking.
 function WeekTable({ weekStart, rows, onChanged, showEmployee }: { weekStart: string; rows: EmpRow[]; employeeId?: string; onChanged: () => void; showEmployee: boolean }) {
-  const dates = DAYS.map((_, i) => addDays(weekStart, i));
+  const dates = useMemo(() => DAYS.map((_, i) => addDays(weekStart, i)), [weekStart]);
+  const totalCols = dates.length * TIERS.length;
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  useEffect(() => setEdits({}), [weekStart]); // drop typed overrides when the week changes
+  const refs = useRef<Map<string, HTMLInputElement>>(new Map());
+  const reconcileTimer = useRef<number | undefined>();
+
+  // Flatten employee→job into navigable rows (in DOM order).
+  const flat = useMemo(
+    () => rows.flatMap((emp) => emp.jobs.map((job, ji) => ({ emp, job, firstOfEmp: ji === 0 }))),
+    [rows],
+  );
+
+  const cellKey = (e: string, j: string, d: string, t: string) => `${e}|${j}|${d}|${t}`;
+  const valueOf = (days: Day[] | undefined, e: string, j: string, d: string, t: 'st' | 'ot' | 'dt') => {
+    const k = cellKey(e, j, d, t);
+    if (edits[k] !== undefined) return edits[k];
+    const day = days?.find((x) => x.date === d);
+    return day && day[t] ? String(day[t]) : '';
+  };
+
+  function focusCell(r: number, c: number) {
+    if (r < 0 || r >= flat.length || c < 0 || c >= totalCols) return;
+    const el = refs.current.get(`${r}:${c}`);
+    if (el && !el.disabled) {
+      el.focus();
+      el.select();
+    }
+  }
+
+  function scheduleReconcile() {
+    window.clearTimeout(reconcileTimer.current);
+    reconcileTimer.current = window.setTimeout(() => onChanged(), 1200);
+  }
+
+  async function commit(employee_id: string, job_id: string, date: string, t: string, raw: string, serverVal: number) {
+    const v = Number(raw) || 0;
+    if (v === serverVal) return;
+    const saved = await saveCell(employee_id, job_id, date, t, v);
+    if (saved !== null) {
+      setEdits((prev) => ({ ...prev, [cellKey(employee_id, job_id, date, t)]: saved ? String(saved) : '' }));
+      scheduleReconcile();
+    }
+  }
+
   return (
     <div className="card overflow-x-auto">
       <table className="w-full text-xs">
@@ -77,40 +128,57 @@ function WeekTable({ weekStart, rows, onChanged, showEmployee }: { weekStart: st
           </tr>
         </thead>
         <tbody>
-          {rows.map((emp) => emp.jobs.map((job, ji) => {
-            const rowTotal = job.days.reduce((a, d) => a + d.st + d.ot + d.dt, 0);
+          {flat.map(({ emp, job, firstOfEmp }, r) => {
+            const rowTotal = dates.reduce(
+              (sum, d) => sum + TIERS.reduce((s, t) => s + (Number(valueOf(job.days, emp.employee_id, job.job_id, d, t)) || 0), 0),
+              0,
+            );
             return (
               <tr key={emp.employee_id + job.job_id}>
                 <td className="td sticky left-0 bg-card">
-                  {showEmployee && ji === 0 && <div className="font-semibold">{emp.employee_name}</div>}
+                  {showEmployee && firstOfEmp && <div className="font-semibold">{emp.employee_name}</div>}
                   <div className="font-mono text-muted">{job.job_code}</div>
                 </td>
-                {dates.map((date) => {
+                {dates.map((date, di) => {
                   const day = job.days.find((d) => d.date === date);
                   const locked = !!day?.invoice_id;
-                  return TIERS.map((t) => (
-                    <td key={date + t} className="border-t border-line p-0">
-                      <input
-                        // key includes the saved value so the cell remounts (shows
-                        // server state) after a refetch instead of keeping stale text.
-                        key={`v-${day?.[t] ?? ''}`}
-                        className={`w-12 bg-transparent px-1 py-1.5 text-center outline-none focus:bg-copper-soft ${locked ? 'bg-paper text-muted' : ''}`}
-                        defaultValue={day?.[t] || ''}
-                        disabled={locked}
-                        aria-label={`${emp.employee_name}, ${job.job_code}, ${DAYS[dates.indexOf(date)]} ${t.toUpperCase()}`}
-                        title={locked ? 'Billed — locked' : `${emp.employee_name}, ${job.job_code}, ${date} ${t.toUpperCase()}`}
-                        onBlur={async (e) => {
-                          const v = Number(e.target.value) || 0;
-                          if (v !== (day?.[t] ?? 0)) { if (await saveCell(emp.employee_id, job.job_id, date, t, v)) onChanged(); }
-                        }}
-                      />
-                    </td>
-                  ));
+                  return TIERS.map((t, ti) => {
+                    const c = di * TIERS.length + ti;
+                    return (
+                      <td key={date + t} className="border-t border-line p-0">
+                        <input
+                          ref={(el) => {
+                            if (el) refs.current.set(`${r}:${c}`, el);
+                            else refs.current.delete(`${r}:${c}`);
+                          }}
+                          className={`w-12 bg-transparent px-1 py-1.5 text-center outline-none focus:bg-copper-soft focus:ring-1 focus:ring-copper ${locked ? 'bg-paper text-muted' : ''}`}
+                          inputMode="decimal"
+                          value={valueOf(job.days, emp.employee_id, job.job_id, date, t)}
+                          disabled={locked}
+                          aria-label={`${emp.employee_name}, ${job.job_code}, ${DAYS[di]} ${t.toUpperCase()}`}
+                          title={locked ? 'Billed — locked' : `${emp.employee_name}, ${job.job_code}, ${date} ${t.toUpperCase()}`}
+                          onFocus={(e) => e.currentTarget.select()}
+                          onChange={(e) => setEdits((prev) => ({ ...prev, [cellKey(emp.employee_id, job.job_id, date, t)]: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              focusCell(r + 1, c);
+                            } else if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              focusCell(r - 1, c);
+                            }
+                            // Tab / Shift+Tab move across columns natively (skipping locked cells).
+                          }}
+                          onBlur={(e) => commit(emp.employee_id, job.job_id, date, t, e.currentTarget.value, day?.[t] ?? 0)}
+                        />
+                      </td>
+                    );
+                  });
                 })}
                 <td className="td text-center font-semibold">{rowTotal || ''}</td>
               </tr>
             );
-          }))}
+          })}
         </tbody>
       </table>
     </div>
