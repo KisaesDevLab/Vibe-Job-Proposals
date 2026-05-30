@@ -35,3 +35,23 @@ the full lifecycle over HTTP. Mirrors the manual checklist in `docs/SMOKETEST.md
 - Phase 18 importer verified separately against the synthetic fixture
   (`docs/sample-import-report.md`); idempotent re-run produces no duplicate rows.
 - Production deployment via `docker/docker-compose.prod.yml`; migrations run on boot.
+
+---
+
+## Post-launch QA hardening (2026-05-30)
+
+Two-pass pre-production QA (security + correctness review agents + dynamic probing).
+
+- **Dependencies:** `npm audit --omit=dev` → **0 vulnerabilities** (removed unused
+  xmldom-pulling module; bumped nodemailer/file-type/drizzle past their CVEs).
+- **Security:** 64-hex `SMTP_ENC_KEY` enforced (no weak fallback); public-upload caps +
+  storage guard; SMTP-test recipient locked to the From address; session regeneration on
+  login; CSP frame-ancestors/object-src/base-uri; error handler no longer leaks
+  library/driver messages; request timeouts; 1MB JSON cap.
+- **Correctness:** atomic `/time/cell` tier-merge (lost-update fix) + value-keyed cells
+  (stale-display fix); inbox processed inside its txn (no duplicate expense); docx renders
+  markup % and resolves names/vendors by id-join; cache-key invalidations tightened.
+- **Added:** Change-Password UI; `docs/` shipped in the Docker runtime image.
+
+Final gate (clean DB from scratch): 16 migrations, bootstrap, **62 tests**, lint,
+type-check, full build, smoke, and `audit.ts` 37/37 — all green. Production-ready.
