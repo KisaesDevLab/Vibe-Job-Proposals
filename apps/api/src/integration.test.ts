@@ -377,6 +377,30 @@ d('API integration', () => {
     expect((await H(agent.post('/api/auth/change-password')).send({ currentPassword: 'a-new-strong-pw-1', newPassword: PW })).status).toBe(200);
   });
 
+  // ---- Job totals by date range (billable rollup) ----
+  it('rolls up priced labor + expenses per job within a date range', async () => {
+    const [lvl] = await sql`SELECT id FROM rate_levels WHERE name='Journeyman'`;
+    const cust = (await H(agent.post('/api/customers')).send({ name: `JTotals ${suffix}`, bill_to_address1: '1', bill_to_city: 'J', bill_to_state: 'MO', bill_to_zip: '64801' })).body.data;
+    const sch = (await H(agent.post(`/api/customers/${cust.id}/rate-schedules`)).send({ name: 'S', effective_from: '2026-01-01' })).body.data;
+    await H(agent.post(`/api/rate-schedules/${sch.id}/lines/bulk`)).send([{ level_id: lvl.id, rate_1x: 100, rate_15x: 150, rate_2x: 200 }]);
+    const emp = (await H(agent.post('/api/employees')).send({ name: `JT ${suffix}`, level_id: lvl.id })).body.data;
+    const job = (await H(agent.post('/api/jobs')).send({ code: `D26JTOT${suffix}`, customer_id: cust.id, description: 'jt' })).body.data;
+    await H(agent.post('/api/time/entries')).send({ employee_id: emp.id, job_id: job.id, work_date: '2026-05-04', st_hours: 8, ot_hours: 2, dt_hours: 0 });
+    await H(agent.post('/api/expenses')).send({ work_date: '2026-05-05', job_id: job.id, vendor: 'V', amount: 150, category: 'materials' });
+    await H(agent.post('/api/time/entries')).send({ employee_id: emp.id, job_id: job.id, work_date: '2026-06-01', st_hours: 8, ot_hours: 0, dt_hours: 0 }); // out of range
+
+    const r = await agent.get('/api/reports/job-totals?from=2026-05-01&to=2026-05-14');
+    const row = r.body.data.find((x: any) => x.job_id === job.id);
+    expect(Number(row.total_hours)).toBe(10); // excludes the June entry
+    expect(Number(row.labor_amount)).toBe(1100); // 8*100 + 2*150
+    expect(Number(row.expense_amount)).toBe(150);
+    expect(Number(row.total_amount)).toBe(1250);
+    expect(Number(row.unbilled_count)).toBe(2);
+    expect(row.missing_rate).toBe(false);
+    // bad input
+    expect((await agent.get('/api/reports/job-totals?from=2026-05-01')).status).toBe(400);
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');

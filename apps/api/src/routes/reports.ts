@@ -19,6 +19,68 @@ function respond(res: any, rows: any[], format: string, name: string) {
   return res.json(ok(rows));
 }
 
+// Job totals over a date range — each job with hours, priced labor, and expenses
+// in [from, to], plus what's still unbillable, as the launch pad for invoicing.
+reportsRouter.get(
+  '/job-totals',
+  ah(async (req, res) => {
+    const { from, to, customer_id, format = 'json' } = req.query as Record<string, string>;
+    if (!from || !to) throw new HttpError(400, 'bad_request', 'from and to dates required');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new HttpError(400, 'bad_request', 'dates must be YYYY-MM-DD');
+    }
+    const rows = await rawsql<any[]>`
+      WITH labor AS (
+        SELECT te.job_id,
+          SUM(te.st_hours)::numeric(12,2) AS st_hours,
+          SUM(te.ot_hours)::numeric(12,2) AS ot_hours,
+          SUM(te.dt_hours)::numeric(12,2) AS dt_hours,
+          SUM(te.st_hours*COALESCE(rsl.rate_1x,0) + te.ot_hours*COALESCE(rsl.rate_15x,0) + te.dt_hours*COALESCE(rsl.rate_2x,0))::numeric(12,2) AS labor_amount,
+          bool_or(rsl.id IS NULL AND (te.st_hours>0 OR te.ot_hours>0 OR te.dt_hours>0)) AS missing_rate,
+          COUNT(*) FILTER (WHERE te.invoice_id IS NULL) AS unbilled_time
+        FROM time_entries te
+        JOIN jobs j ON j.id = te.job_id
+        JOIN employees e ON e.id = te.employee_id
+        LEFT JOIN rate_schedules rs ON rs.customer_id = j.customer_id
+          AND daterange(rs.effective_from, rs.effective_to, '[)') @> te.work_date
+        LEFT JOIN rate_schedule_lines rsl ON rsl.schedule_id = rs.id AND rsl.level_id = e.level_id
+        WHERE te.work_date BETWEEN ${from}::date AND ${to}::date
+        GROUP BY te.job_id
+      ),
+      exp AS (
+        SELECT x.job_id,
+          SUM(x.amount)::numeric(12,2) AS expense_amount,
+          COUNT(*) FILTER (WHERE x.invoice_id IS NULL) AS unbilled_expense
+        FROM expenses x
+        WHERE x.work_date BETWEEN ${from}::date AND ${to}::date
+        GROUP BY x.job_id
+      )
+      SELECT j.id AS job_id, j.code, c.name AS customer_name, j.billing_type,
+        COALESCE(labor.st_hours,0) AS st_hours,
+        COALESCE(labor.ot_hours,0) AS ot_hours,
+        COALESCE(labor.dt_hours,0) AS dt_hours,
+        (COALESCE(labor.st_hours,0)+COALESCE(labor.ot_hours,0)+COALESCE(labor.dt_hours,0)) AS total_hours,
+        COALESCE(labor.labor_amount,0) AS labor_amount,
+        COALESCE(exp.expense_amount,0) AS expense_amount,
+        (COALESCE(labor.labor_amount,0)+COALESCE(exp.expense_amount,0)) AS total_amount,
+        COALESCE(labor.missing_rate,false) AS missing_rate,
+        (COALESCE(labor.unbilled_time,0)+COALESCE(exp.unbilled_expense,0)) AS unbilled_count,
+        (SELECT id FROM invoices WHERE job_id=j.id AND status='draft' LIMIT 1) AS open_draft_id
+      FROM jobs j
+      JOIN customers c ON c.id = j.customer_id
+      LEFT JOIN labor ON labor.job_id = j.id
+      LEFT JOIN exp ON exp.job_id = j.id
+      WHERE (labor.job_id IS NOT NULL OR exp.job_id IS NOT NULL)
+        AND (${customer_id ?? null}::uuid IS NULL OR j.customer_id = ${customer_id ?? null}::uuid)
+      ORDER BY total_amount DESC, c.name, j.code`;
+    if (format === 'csv') {
+      const flat = rows.map((r) => ({ code: r.code, customer: r.customer_name, billing_type: r.billing_type, st_hours: r.st_hours, ot_hours: r.ot_hours, dt_hours: r.dt_hours, total_hours: r.total_hours, labor_amount: r.labor_amount, expense_amount: r.expense_amount, total_amount: r.total_amount, unbilled_count: r.unbilled_count }));
+      return respond(res, flat, 'csv', 'job-totals');
+    }
+    res.json(ok(rows));
+  }),
+);
+
 // Report 1 — Hours by Employee for Job/Invoice
 reportsRouter.get(
   '/employee-hours',

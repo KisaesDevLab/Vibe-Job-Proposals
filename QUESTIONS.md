@@ -347,3 +347,24 @@ invoice-data id-joins, statfs guard) and found 5 smaller issues — all fixed:
 - **LOW:** the Time "Add row" button now requires a positive seed (a 0 seed silently
   created nothing).
 Also added the **Change Password** UI and shipped `docs/` in the Docker runtime image.
+
+---
+
+## Job totals by date range + invoice launch (feature request)
+
+Requested: see each job's total labor + expenses over a date range, then start invoicing
+from that screen.
+**Implemented:**
+- `GET /api/reports/job-totals?from=&to=&customer_id=&format=` — cross-job rollup: per job,
+  ST/OT/DT hours, **priced labor** (hours × the rate-schedule rate covering each work_date,
+  via a SQL lateral join), expense sum, combined total, an unbilled-entry count, a
+  `missing_rate` flag (some hours have no covering schedule → labor understated), and any
+  open draft id. JSON + CSV. Integration-tested (range exclusion, pricing, bad input).
+- Invoices page gains a **"Billable by date range"** tab: From/To + customer filter, a
+  sortable totals table (sorted by total desc) with a footer totals row and CSV export.
+  Each row's action is **Create invoice →** (starts a draft with `through_date = To`, then
+  jumps to the draft screen) or **Open draft** if one already exists. Disabled when the job
+  has nothing unbilled.
+**Note:** the rollup shows all activity in the range, but invoicing remains through-date
+based (binds unbilled entries ≤ To date) — surfaced in the UI copy so the two aren't
+conflated.
