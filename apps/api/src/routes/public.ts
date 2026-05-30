@@ -3,17 +3,33 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { timingSafeEqual } from 'node:crypto';
+import { statfsSync } from 'node:fs';
 import rateLimit from 'express-rate-limit';
 import { RedisStore } from 'rate-limit-redis';
 import { ok, fail } from '@darrow/shared';
 import { redis } from '../redis.js';
 import { config } from '../config.js';
+import { STORAGE } from '../storage.js';
 import { ah } from '../error-handler.js';
 import { ingestInboxFile } from '../services/inbox-ingest.js';
 import { writeAudit } from '../audit.js';
+import { logger } from '../logger.js';
 
 export const publicRouter = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+// memoryStorage, capped per-file and to 10 files so an anonymous request can't
+// buffer an unbounded amount (10 × 25MB max).
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 10 } });
+
+// Reject uploads when the storage volume is low (coarse disk-exhaustion guard).
+function hasFreeSpace(minBytes = 500 * 1024 * 1024): boolean {
+  try {
+    const s = statfsSync(STORAGE);
+    return s.bavail * s.bsize >= minBytes;
+  } catch (err) {
+    logger.warn('statfs failed; skipping free-space guard', { err: String(err) });
+    return true;
+  }
+}
 
 function tokenOk(provided: unknown): boolean {
   const expected = config.PUBLIC_UPLOAD_TOKEN;
@@ -53,6 +69,7 @@ publicRouter.post(
 
     const files = (req.files as Express.Multer.File[]) ?? [];
     if (files.length === 0) return res.status(400).json(fail('no_file', 'No files uploaded'));
+    if (!hasFreeSpace()) return res.status(507).json(fail('storage_full', 'Storage is full; please try again later'));
     const jobCode = typeof req.body?.job_code === 'string' ? req.body.job_code.slice(0, 60) : null;
     const notes = typeof req.body?.notes === 'string' ? req.body.notes.slice(0, 1000) : null;
 

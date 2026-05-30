@@ -114,6 +114,10 @@ inboxRouter.post(
     if (body.work_date > limit) return res.status(400).json(fail('future_date', 'work_date is more than 30 days in the future'));
 
     const result = await db.transaction(async (tx) => {
+      // Consume the inbox row atomically: if another request already processed it,
+      // this affects 0 rows and we abort, preventing a duplicate expense.
+      const deleted = await tx.delete(inboxDocuments).where(eq(inboxDocuments.id, doc.id)).returning({ id: inboxDocuments.id });
+      if (deleted.length === 0) throw new HttpError(409, 'already_processed', 'This bill was already processed');
       const [exp] = await tx
         .insert(expenses)
         .values({
@@ -136,8 +140,8 @@ inboxRouter.post(
       return { expense: exp, attachment: att };
     });
 
-    // After commit: drop the inbox record + its storage dir.
-    await db.delete(inboxDocuments).where(eq(inboxDocuments.id, doc.id));
+    // After commit: remove the (now-orphaned) inbox storage dir. Safe to do
+    // post-commit — at worst it leaves files, never a duplicate expense.
     const inboxDir = paths.inboxDir(doc.id);
     if (existsSync(inboxDir)) rmSync(inboxDir, { recursive: true, force: true });
 

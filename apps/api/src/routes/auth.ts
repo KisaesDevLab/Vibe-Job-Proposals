@@ -32,6 +32,8 @@ authRouter.post(
     if (!u || !u.active || !(await bcrypt.compare(password, u.passwordHash))) {
       return res.status(401).json(fail('invalid_credentials', 'Invalid username or password'));
     }
+    // Regenerate the session on login to defeat session fixation.
+    await new Promise<void>((resolve, reject) => req.session.regenerate((err) => (err ? reject(err) : resolve())));
     req.session.userId = u.id;
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, u.id));
     res.json(ok({ id: u.id, username: u.username, role: u.role }));
@@ -157,7 +159,8 @@ authRouter.post(
     });
     try {
       await transport.verify();
-      const to = (req.body?.to as string) || u.smtpFromAddress;
+      // Test mail goes only to the user's own From address — never an arbitrary recipient.
+      const to = u.smtpFromAddress;
       if (to) {
         await transport.sendMail({
           from: u.smtpFromName ? `"${u.smtpFromName}" <${u.smtpFromAddress}>` : u.smtpFromAddress ?? to,

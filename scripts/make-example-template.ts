@@ -48,7 +48,7 @@ const body = [
   p('{#has_stock_material}Stock Material: {totals.stock_material}{/has_stock_material}'),
   p(''),
   p('{#has_markup}MARKUPS{/has_markup}', { bold: true }),
-  p('{#markup_lines}{category_label} Markup = {amount}{/markup_lines}'),
+  p('{#markup_lines}{category_label} Markup ({percent_label}) = {amount}{/markup_lines}'),
   p('Total Markup: {totals.markup}'),
   p(''),
   p('GRAND TOTAL: {totals.grand_total}', { bold: true, size: 28 }),

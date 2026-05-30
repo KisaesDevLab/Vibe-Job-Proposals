@@ -135,7 +135,7 @@ async function main() {
   // guard against the dotted-placeholder regression: scalars must render into the docx
   const { default: PizZip } = await import('pizzip');
   const docXmlText = new PizZip(docxBuf).file('word/document.xml')!.asText().replace(/<[^>]+>/g, '');
-  for (const needle of [fin.billed_reference, 'Smoke Co', '$2,909.33']) {
+  for (const needle of [fin.billed_reference, 'Smoke Co', '$2,909.33', 'Graybar', '15%']) {
     if (!docXmlText.includes(needle)) throw new Error(`docx missing rendered value "${needle}" (placeholder regression)`);
   }
   log(`downloaded docx (${docxBuf.length}b) + pdf (${pdfBuf.length}b); scalars rendered`);

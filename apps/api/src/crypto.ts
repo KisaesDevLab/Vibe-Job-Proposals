@@ -5,8 +5,10 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 function keyFromEnv(): Buffer {
   const keyHex = process.env.SMTP_ENC_KEY ?? '';
-  if (!keyHex) throw new Error('SMTP_ENC_KEY is not set');
-  return Buffer.from(keyHex.length === 64 ? keyHex : Buffer.from(keyHex).toString('hex').slice(0, 64), 'hex');
+  if (!/^[0-9a-fA-F]{64}$/.test(keyHex)) {
+    throw new Error('SMTP_ENC_KEY must be exactly 64 hex characters (32 bytes)');
+  }
+  return Buffer.from(keyHex, 'hex');
 }
 
 export function encryptSecret(plain: string): string {

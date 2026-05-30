@@ -218,12 +218,17 @@ export async function finalizeInvoice(invoiceId: string, userId: string | null):
       const sub = byCat.get(cat);
       if (sub && sub > 0) await ins({ line_type: 'expense_subtotal', category: cat, description: `${EXPENSE_CATEGORY_LABELS[cat]} Subtotal`, amount: sub, cost_amount: sub });
     }
-    // markup lines per category with non-zero markup
+    // markup lines per category with non-zero markup; the effective percent
+    // (consistent within a category) is persisted in unit_rate for the renderer.
     const markupByCat = new Map<ExpenseCategory, number>();
-    for (const e of preview.expense_lines) markupByCat.set(e.category, (markupByCat.get(e.category) ?? 0) + e.markup_amount);
+    const pctByCat = new Map<ExpenseCategory, number>();
+    for (const e of preview.expense_lines) {
+      markupByCat.set(e.category, (markupByCat.get(e.category) ?? 0) + e.markup_amount);
+      pctByCat.set(e.category, e.markup_percent);
+    }
     for (const cat of EXPENSE_CATEGORIES) {
       const mk = markupByCat.get(cat);
-      if (mk && mk > 0) await ins({ line_type: 'expense_markup', category: cat, description: `${EXPENSE_CATEGORY_LABELS[cat]} Markup`, amount: mk, cost_amount: 0 });
+      if (mk && mk > 0) await ins({ line_type: 'expense_markup', category: cat, description: `${EXPENSE_CATEGORY_LABELS[cat]} Markup`, unit_rate: pctByCat.get(cat) ?? 0, amount: mk, cost_amount: 0 });
     }
     await ins({ line_type: 'grand_total', description: 'Grand Total', amount: preview.totals.grand_total, cost_amount: null });
 

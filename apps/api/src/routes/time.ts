@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { Router } from 'express';
 import { ok, fail, timeEntrySchema, timeEntryBulkSchema } from '@darrow/shared';
 import { db, sql as rawsql, timeEntries } from '@darrow/db';
@@ -76,6 +77,40 @@ timeRouter.post(
   ah(async (req, res) => {
     const e = timeEntrySchema.parse(req.body);
     const result = await rawsql.begin((tx: any) => upsertOne(tx, e as any));
+    res.json(ok(result));
+  }),
+);
+
+// Single-cell merge: set ONE tier on the (employee, job, date) row, reading the
+// other two tiers from the DB inside the transaction so concurrent edits to
+// sibling tiers can't clobber each other (lost-update fix).
+const cellSchema = z.object({
+  employee_id: z.string().uuid(),
+  job_id: z.string().uuid(),
+  work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  tier: z.enum(['st', 'ot', 'dt']),
+  hours: z.coerce.number().min(0).max(24),
+});
+timeRouter.post(
+  '/cell',
+  ah(async (req, res) => {
+    const c = cellSchema.parse(req.body);
+    const result = await rawsql.begin(async (tx: any) => {
+      const existing = await tx`SELECT id, invoice_id, st_hours, ot_hours, dt_hours FROM time_entries
+        WHERE employee_id=${c.employee_id} AND job_id=${c.job_id} AND work_date=${c.work_date}::date FOR UPDATE`;
+      if (existing.length && existing[0].invoice_id) throw new HttpError(409, 'locked', 'Entry is billed and locked');
+      const cur = existing[0] ?? { st_hours: 0, ot_hours: 0, dt_hours: 0 };
+      const merged = {
+        employee_id: c.employee_id,
+        job_id: c.job_id,
+        work_date: c.work_date,
+        st_hours: Number(cur.st_hours) || 0,
+        ot_hours: Number(cur.ot_hours) || 0,
+        dt_hours: Number(cur.dt_hours) || 0,
+      };
+      merged[`${c.tier}_hours` as 'st_hours'] = c.hours;
+      return upsertOne(tx, merged);
+    });
     res.json(ok(result));
   }),
 );

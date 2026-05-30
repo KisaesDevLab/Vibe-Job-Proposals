@@ -60,6 +60,10 @@ use **Regenerate** (with a template uploaded) to produce documents.
 WIP-by-job, job profitability (cost vs bill), and employee summary across jobs are not in
 v1.
 
+## Reverse proxy
+
+The app sets `trust proxy: 1` and rate-limits by client IP, so it must run behind **exactly one** reverse proxy (e.g. the Caddy example). Running it directly internet-facing, or behind two proxies, lets clients spoof `X-Forwarded-For` and bypass the login/upload rate limits.
+
 ## Security & firewall
 
 - Only ports 80/443 should be exposed; terminate TLS at a reverse proxy

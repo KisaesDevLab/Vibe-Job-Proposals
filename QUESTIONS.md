@@ -287,3 +287,47 @@ tab, so contact details couldn't be edited after creation (the API already suppo
 - Invoice detail now returns `customer_contact_email`, so the **Email Invoice** modal
   pre-fills the customer's email as the recipient.
 **Verification:** 59 tests (new customer contact create/edit test), green gate, smoke.
+
+---
+
+## Pre-production QA — pass 1 (security + correctness hardening)
+
+Two review agents (security + correctness) plus dynamic probing. Findings fixed:
+
+### Dependencies — now 0 prod vulnerabilities
+- Removed **unused** `docxtemplater-image-module-free` (dragged in critical `xmldom`).
+- Bumped `nodemailer` 6→8 (addressparser DoS), `file-type` 19→22 (ASF loop), `drizzle-orm`
+  0.31→0.45.2 (SQL-identifier-escaping CVE). All verified: tests/audit/smoke/verify-email
+  pass; `npm audit --omit=dev` → **found 0 vulnerabilities**.
+
+### Security
+- **AES key (H1):** `SMTP_ENC_KEY` now must be exactly 64 hex chars (validated at config
+  boot); removed the truncating non-KDF fallback; consolidated encrypt/decrypt to
+  `apps/api/src/crypto.ts` (and a strict copy in the worker). `.env.example` documents the
+  format.
+- **Public-upload DoS (H2):** capped to 10 files/request + a storage free-space guard (507
+  when low).
+- **SMTP test abuse (M1):** both test endpoints now send only to the configured/own From
+  address (no attacker-chosen recipient).
+- **Session fixation (M2):** `req.session.regenerate()` on login.
+- **CSP (M3):** added `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`.
+- **Error leak (M4):** only `HttpError`/`ZodError`/explicit-4xx messages reach clients;
+  everything else returns a generic 500. Multer `LIMIT_FILE_SIZE` → 413.
+- **L4:** JSON body limit 5mb→1mb; added server request/headers timeouts.
+
+### Correctness
+- **Time grid (MED×2):** new atomic `POST /api/time/cell` merges one tier under a row lock
+  (kills the same-row lost-update); cell inputs keyed by saved value so they reflect server
+  state after refetch.
+- **Inbox double-process (LOW):** the inbox row is now consumed *inside* the process
+  transaction (returning-guard) — a second process can't create a duplicate expense.
+- **Markup % + names on docx (LOW):** snapshot persists the markup percent (in
+  `unit_rate`); the renderer resolves employee names + expense vendors by **id join**
+  instead of splitting the formatted description; the starter template shows
+  `Markup ({percent_label})`. Smoke now guards "Graybar" + "15%".
+- **Invoice list refresh (LOW):** finalize/void also invalidate the `['invoices']` query.
+
+### Accepted / documented
+- Finalize rebuilds the preview just before the snapshot txn (a stale-bind window only
+  under concurrent multi-tab editing) — acceptable for the single-admin deployment.
+- `trust proxy: 1` requires exactly one reverse proxy in front (documented in OPERATIONS).

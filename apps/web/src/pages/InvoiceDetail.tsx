@@ -22,7 +22,7 @@ export function InvoiceDetailPage({ id }: { id: string }) {
 
   const finalize = useMutation({
     mutationFn: () => api.post(`/invoices/${id}/finalize`),
-    onSuccess: () => { toast('Invoice finalized'); qc.invalidateQueries({ queryKey: ['invoice', id] }); },
+    onSuccess: () => { toast('Invoice finalized'); qc.invalidateQueries({ queryKey: ['invoice', id] }); qc.invalidateQueries({ queryKey: ['invoices'] }); },
     onError: (e: any) => toast(e.details ? `Blocked: ${e.details.map((b: any) => b.message).join('; ')}` : e.message, 'err'),
   });
 
@@ -57,7 +57,7 @@ export function InvoiceDetailPage({ id }: { id: string }) {
 
       {isDraft ? <DraftView id={id} data={data} /> : <SnapshotView inv={inv} lines={data.line_items} />}
 
-      {voiding && <VoidModal id={id} reference={inv.billed_reference} onClose={() => setVoiding(false)} onVoided={() => { setVoiding(false); qc.invalidateQueries({ queryKey: ['invoice', id] }); }} />}
+      {voiding && <VoidModal id={id} reference={inv.billed_reference} onClose={() => setVoiding(false)} onVoided={() => { setVoiding(false); qc.invalidateQueries({ queryKey: ['invoice', id] }); qc.invalidateQueries({ queryKey: ['invoices'] }); }} />}
       {emailing && <EmailModal id={id} inv={inv} onClose={() => setEmailing(false)} />}
     </div>
   );

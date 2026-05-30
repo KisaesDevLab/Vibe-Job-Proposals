@@ -31,11 +31,20 @@ export function createApp(): express.Express {
   app.use(
     helmet({
       contentSecurityPolicy: isProd
-        ? { directives: { defaultSrc: ["'self'"], imgSrc: ["'self'", 'data:'], styleSrc: ["'self'", "'unsafe-inline'"] } }
+        ? {
+            directives: {
+              defaultSrc: ["'self'"],
+              imgSrc: ["'self'", 'data:'],
+              styleSrc: ["'self'", "'unsafe-inline'"],
+              objectSrc: ["'none'"],
+              frameAncestors: ["'none'"],
+              baseUri: ["'self'"],
+            },
+          }
         : false,
     }),
   );
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true }));
 
   app.use(

@@ -24,10 +24,11 @@ interface Day { id: string; date: string; st: number; ot: number; dt: number; in
 interface JobRow { job_id: string; job_code: string; days: Day[]; }
 interface EmpRow { employee_id: string; employee_name: string; jobs: JobRow[]; }
 
-async function saveCell(employee_id: string, job_id: string, date: string, tier: string, value: number, day: Day | undefined): Promise<boolean> {
-  const body = { employee_id, job_id, work_date: date, st_hours: day?.st ?? 0, ot_hours: day?.ot ?? 0, dt_hours: day?.dt ?? 0, [`${tier}_hours`]: value };
+// Atomic single-cell save: the server reads the other two tiers under a row lock
+// and merges, so rapid edits to sibling tiers can't clobber each other.
+async function saveCell(employee_id: string, job_id: string, date: string, tier: string, value: number): Promise<boolean> {
   try {
-    await api.post('/time/entries', body);
+    await api.post('/time/cell', { employee_id, job_id, work_date: date, tier, hours: value });
     return true;
   } catch (e: any) {
     toast(e.message, 'err');
@@ -90,6 +91,9 @@ function WeekTable({ weekStart, rows, onChanged, showEmployee }: { weekStart: st
                   return TIERS.map((t) => (
                     <td key={date + t} className="border-t border-line p-0">
                       <input
+                        // key includes the saved value so the cell remounts (shows
+                        // server state) after a refetch instead of keeping stale text.
+                        key={`v-${day?.[t] ?? ''}`}
                         className={`w-12 bg-transparent px-1 py-1.5 text-center outline-none focus:bg-copper-soft ${locked ? 'bg-paper text-muted' : ''}`}
                         defaultValue={day?.[t] || ''}
                         disabled={locked}
@@ -97,7 +101,7 @@ function WeekTable({ weekStart, rows, onChanged, showEmployee }: { weekStart: st
                         title={locked ? 'Billed — locked' : `${emp.employee_name}, ${job.job_code}, ${date} ${t.toUpperCase()}`}
                         onBlur={async (e) => {
                           const v = Number(e.target.value) || 0;
-                          if (v !== (day?.[t] ?? 0)) { if (await saveCell(emp.employee_id, job.job_id, date, t, v, day)) onChanged(); }
+                          if (v !== (day?.[t] ?? 0)) { if (await saveCell(emp.employee_id, job.job_id, date, t, v)) onChanged(); }
                         }}
                       />
                     </td>

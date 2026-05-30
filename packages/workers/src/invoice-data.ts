@@ -22,10 +22,19 @@ export async function buildInvoiceData(invoiceId: string): Promise<Record<string
   const [settings] = await sql<any[]>`SELECT * FROM settings WHERE id=1`;
   const lines = await sql<any[]>`SELECT * FROM invoice_line_items WHERE invoice_id=${invoiceId} ORDER BY line_order`;
 
+  // Resolve real names/vendors from the stored ids rather than parsing the
+  // formatted description (which breaks if a label contains the separator).
+  const empIds = [...new Set(lines.filter((l) => l.employee_id).map((l) => l.employee_id))];
+  const expIds = [...new Set(lines.filter((l) => l.expense_id).map((l) => l.expense_id))];
+  const empRows = empIds.length ? await sql<any[]>`SELECT id, name FROM employees WHERE id IN ${sql(empIds)}` : [];
+  const expRows = expIds.length ? await sql<any[]>`SELECT id, vendor, description FROM expenses WHERE id IN ${sql(expIds)}` : [];
+  const empName = new Map(empRows.map((e) => [e.id, e.name]));
+  const expById = new Map(expRows.map((e) => [e.id, e]));
+
   const laborLines = lines
     .filter((l) => l.line_type === 'labor')
     .map((l) => ({
-      employee_name: l.description.split(' – ')[0],
+      employee_name: empName.get(l.employee_id) ?? l.description.split(' – ')[0],
       tier_label: TIER_LABELS[(l.tier ?? 'st') as keyof typeof TIER_LABELS],
       hours: Number(l.quantity),
       rate: formatMoney(l.unit_rate),
@@ -34,17 +43,21 @@ export async function buildInvoiceData(invoiceId: string): Promise<Record<string
 
   const expenseFlat = lines
     .filter((l) => l.line_type === 'expense')
-    .map((l) => ({
-      category_label: EXPENSE_CATEGORY_LABELS[l.category as ExpenseCategory] ?? l.category,
-      vendor: l.description.split(' – ')[1] ?? '',
-      description: l.description,
-      amount: formatMoney(l.amount),
-    }));
+    .map((l) => {
+      const e = expById.get(l.expense_id);
+      return {
+        category_label: EXPENSE_CATEGORY_LABELS[l.category as ExpenseCategory] ?? l.category,
+        vendor: e?.vendor ?? '',
+        description: e?.description ?? '',
+        amount: formatMoney(l.amount),
+      };
+    });
 
   const markupLines = lines
     .filter((l) => l.line_type === 'expense_markup')
     .map((l) => ({
       category_label: EXPENSE_CATEGORY_LABELS[l.category as ExpenseCategory] ?? l.category,
+      percent_label: formatPercent(l.unit_rate ?? 0),
       amount: formatMoney(l.amount),
     }));
 
@@ -96,7 +109,7 @@ export async function buildInvoiceData(invoiceId: string): Promise<Record<string
     labor_lines: laborLines,
     expense_lines_flat: expenseFlat,
     expense_lines_by_category: byCat,
-    markup_lines: markupLines.map((m) => ({ ...m, percent_label: '' })),
+    markup_lines: markupLines,
     has_labor: laborLines.length > 0,
     has_materials: Number(inv.total_materials) > 0,
     has_equipment_rent: Number(inv.total_equipment_rent) > 0,

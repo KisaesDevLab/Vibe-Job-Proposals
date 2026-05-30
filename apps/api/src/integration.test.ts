@@ -330,6 +330,42 @@ d('API integration', () => {
     expect(got.contactPhone).toBe('4175559999');
   });
 
+  // ---- Time single-cell atomic merge (lost-update fix) ----
+  it('merges single-cell saves without clobbering sibling tiers', async () => {
+    const [lvl] = await sql`SELECT id FROM rate_levels WHERE name='Journeyman'`;
+    const cust = (await H(agent.post('/api/customers')).send({ name: `Cell ${suffix}`, bill_to_address1: '1', bill_to_city: 'J', bill_to_state: 'MO', bill_to_zip: '64801' })).body.data;
+    const job = (await H(agent.post('/api/jobs')).send({ code: `D26CELL${suffix}`, customer_id: cust.id, description: 'c' })).body.data;
+    const emp = (await H(agent.post('/api/employees')).send({ name: `Cell Tech ${suffix}`, level_id: lvl.id })).body.data;
+    await H(agent.post('/api/time/cell')).send({ employee_id: emp.id, job_id: job.id, work_date: '2024-08-01', tier: 'st', hours: 8 });
+    await H(agent.post('/api/time/cell')).send({ employee_id: emp.id, job_id: job.id, work_date: '2024-08-01', tier: 'ot', hours: 2 });
+    const [row] = await sql`SELECT st_hours, ot_hours, dt_hours FROM time_entries WHERE employee_id=${emp.id} AND job_id=${job.id} AND work_date='2024-08-01'`;
+    expect(Number(row.st_hours)).toBe(8); // not clobbered by the OT save
+    expect(Number(row.ot_hours)).toBe(2);
+    // setting both to zero deletes the row
+    await H(agent.post('/api/time/cell')).send({ employee_id: emp.id, job_id: job.id, work_date: '2024-08-01', tier: 'st', hours: 0 });
+    await H(agent.post('/api/time/cell')).send({ employee_id: emp.id, job_id: job.id, work_date: '2024-08-01', tier: 'ot', hours: 0 });
+    const after = await sql`SELECT id FROM time_entries WHERE employee_id=${emp.id} AND job_id=${job.id} AND work_date='2024-08-01'`;
+    expect(after.length).toBe(0);
+  });
+
+  // ---- Inbox cannot be double-processed into duplicate expenses ----
+  it('does not create a duplicate expense when an inbox doc is processed twice', async () => {
+    const { PDFDocument } = await import('pdf-lib');
+    const pdf = await PDFDocument.create();
+    pdf.addPage([200, 200]);
+    const pdfBuf = Buffer.from(await pdf.save());
+    const docId = (await H(agent.post('/api/inbox')).attach('files', pdfBuf, 'dup.pdf')).body.data.created[0].id;
+    const cust = (await H(agent.post('/api/customers')).send({ name: `Dup ${suffix}`, bill_to_address1: '1', bill_to_city: 'J', bill_to_state: 'MO', bill_to_zip: '64801' })).body.data;
+    const job = (await H(agent.post('/api/jobs')).send({ code: `D26DUP${suffix}`, customer_id: cust.id, description: 'd' })).body.data;
+    const proc = await H(agent.post(`/api/inbox/${docId}/process`)).send({ work_date: '2024-06-03', job_id: job.id, vendor: 'V', amount: 10, category: 'materials' });
+    expect(proc.status).toBe(201);
+    // second attempt: the doc is already consumed -> not found / conflict, never a 2nd expense
+    const again = await H(agent.post(`/api/inbox/${docId}/process`)).send({ work_date: '2024-06-03', job_id: job.id, vendor: 'V', amount: 10, category: 'materials' });
+    expect([404, 409]).toContain(again.status);
+    const [{ n }] = await sql`SELECT count(*)::int n FROM expenses WHERE job_id=${job.id}`;
+    expect(Number(n)).toBe(1);
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');

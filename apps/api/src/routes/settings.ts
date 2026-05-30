@@ -11,6 +11,7 @@ import { ah, HttpError } from '../error-handler.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 import { paths } from '../storage.js';
 import { writeAudit } from '../audit.js';
+import { encryptSecret, decryptSecret } from '../crypto.js';
 
 export const settingsRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -164,16 +165,7 @@ settingsRouter.put(
     if (body.smtp_enabled && !process.env.SMTP_ENC_KEY) {
       return res.status(400).json(fail('no_enc_key', 'SMTP_ENC_KEY must be set to enable SMTP'));
     }
-    let enc: string | undefined;
-    if (body.smtp_password) {
-      const { createCipheriv, randomBytes } = await import('node:crypto');
-      const keyHex = process.env.SMTP_ENC_KEY ?? '';
-      const key = Buffer.from(keyHex.length === 64 ? keyHex : Buffer.from(keyHex).toString('hex').slice(0, 64), 'hex');
-      const iv = randomBytes(12);
-      const cipher = createCipheriv('aes-256-gcm', key, iv);
-      const ct = Buffer.concat([cipher.update(body.smtp_password, 'utf8'), cipher.final()]);
-      enc = `${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${ct.toString('base64')}`;
-    }
+    const enc = body.smtp_password ? encryptSecret(body.smtp_password) : undefined;
     await db
       .update(settings)
       .set({
@@ -205,20 +197,14 @@ settingsRouter.get(
 // SMTP test-connect (Phase 17): verify the transport, optionally send a test email.
 settingsRouter.post(
   '/smtp/test',
-  ah(async (req, res) => {
+  ah(async (_req, res) => {
     const [row] = await db.select().from(settings).where(eq(settings.id, 1));
     if (!row?.smtpHost) return res.status(400).json(fail('not_configured', 'SMTP host not configured'));
     const nodemailer = (await import('nodemailer')).default;
     let password: string | undefined;
-    if (row.smtpPasswordEnc && process.env.SMTP_ENC_KEY) {
+    if (row.smtpPasswordEnc) {
       try {
-        const { createDecipheriv } = await import('node:crypto');
-        const keyHex = process.env.SMTP_ENC_KEY;
-        const key = Buffer.from(keyHex.length === 64 ? keyHex : Buffer.from(keyHex).toString('hex').slice(0, 64), 'hex');
-        const [iv, tag, data] = row.smtpPasswordEnc.split(':');
-        const dec = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
-        dec.setAuthTag(Buffer.from(tag, 'base64'));
-        password = dec.update(Buffer.from(data, 'base64')).toString('utf8') + dec.final('utf8');
+        password = decryptSecret(row.smtpPasswordEnc);
       } catch {
         return res.status(400).json(fail('decrypt_failed', 'Could not decrypt stored SMTP password'));
       }
@@ -231,7 +217,8 @@ settingsRouter.post(
     });
     try {
       await transport.verify();
-      const to = (req.body?.to as string) || row.smtpFromAddress;
+      // Test mail goes only to the configured From address — never an arbitrary recipient.
+      const to = row.smtpFromAddress;
       if (to) {
         await transport.sendMail({ from: row.smtpFromName ? `"${row.smtpFromName}" <${row.smtpFromAddress}>` : row.smtpFromAddress ?? to, to, subject: 'Darrow SMTP test', text: 'SMTP configuration test from Darrow Time & Invoicing.' });
       }

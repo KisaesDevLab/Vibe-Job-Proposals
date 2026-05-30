@@ -42,7 +42,7 @@
     "@vitest/coverage-v8": "^1.6.1",
     "bcryptjs": "^2.4.3",
     "concurrently": "^8.2.2",
-    "drizzle-orm": "^0.31.2",
+    "drizzle-orm": "^0.45.2",
     "eslint": "^8.57.0",
     "eslint-plugin-react": "^7.34.2",
     "eslint-plugin-react-hooks": "^4.6.2",

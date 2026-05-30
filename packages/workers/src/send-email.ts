@@ -9,7 +9,8 @@ import { resolveSmtp, type SmtpProfile } from '@darrow/shared';
 import { connection, logger } from './connection.js';
 
 export function decryptSecret(enc: string, keyHex: string): string {
-  const key = Buffer.from(keyHex.length === 64 ? keyHex : Buffer.from(keyHex).toString('hex').slice(0, 64), 'hex');
+  if (!/^[0-9a-fA-F]{64}$/.test(keyHex)) throw new Error('SMTP_ENC_KEY must be exactly 64 hex characters (32 bytes)');
+  const key = Buffer.from(keyHex, 'hex');
   const [ivB64, tagB64, dataB64] = enc.split(':');
   const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
   decipher.setAuthTag(Buffer.from(tagB64, 'base64'));

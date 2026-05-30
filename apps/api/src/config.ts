@@ -11,7 +11,10 @@ const schema = z.object({
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
   LIBREOFFICE_BIN: z.string().default('/usr/bin/libreoffice'),
   PORT: z.coerce.number().default(4000),
-  SMTP_ENC_KEY: z.string().optional(),
+  SMTP_ENC_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, 'SMTP_ENC_KEY must be 64 hex chars (32 bytes)')
+    .optional(),
   PUBLIC_UPLOAD_TOKEN: z.string().optional(),
 });
 
