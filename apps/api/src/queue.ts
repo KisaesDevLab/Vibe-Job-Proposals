@@ -8,12 +8,14 @@ const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
 
 export const QUEUE_NAMES = {
   imageToPdf: 'image-to-pdf',
+  inboxToPdf: 'inbox-to-pdf',
   renderDocx: 'render-docx',
   docxToPdf: 'docx-to-pdf',
   sendEmail: 'send-invoice-email',
 } as const;
 
 export const imageToPdfQueue = new Queue(QUEUE_NAMES.imageToPdf, { connection: connection as any });
+export const inboxToPdfQueue = new Queue(QUEUE_NAMES.inboxToPdf, { connection: connection as any });
 export const renderDocxQueue = new Queue(QUEUE_NAMES.renderDocx, { connection: connection as any });
 export const docxToPdfQueue = new Queue(QUEUE_NAMES.docxToPdf, { connection: connection as any });
 export const sendEmailQueue = new Queue(QUEUE_NAMES.sendEmail, { connection: connection as any });
@@ -22,6 +24,9 @@ const defaultOpts = { attempts: 3, backoff: { type: 'exponential', delay: 2000 }
 
 export async function enqueueImageToPdf(attachmentId: string): Promise<void> {
   await imageToPdfQueue.add('convert', { attachmentId }, defaultOpts);
+}
+export async function enqueueInboxToPdf(docId: string): Promise<void> {
+  await inboxToPdfQueue.add('convert', { docId }, defaultOpts);
 }
 export async function enqueueRenderDocx(invoiceId: string): Promise<void> {
   await renderDocxQueue.add('render', { invoiceId }, { ...defaultOpts, attempts: 3 });

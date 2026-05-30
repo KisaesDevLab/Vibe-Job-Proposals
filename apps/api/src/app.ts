@@ -20,6 +20,7 @@ import { rateSchedulesRouter, customerScheduleRouter } from './routes/rate-sched
 import { jobsRouter } from './routes/jobs.js';
 import { timeRouter } from './routes/time.js';
 import { expensesRouter } from './routes/expenses.js';
+import { inboxRouter } from './routes/inbox.js';
 import { invoicesRouter } from './routes/invoices.js';
 import { reportsRouter } from './routes/reports.js';
 
@@ -79,6 +80,7 @@ export function createApp(): express.Express {
   app.use('/api/jobs', jobsRouter);
   app.use('/api/time', timeRouter);
   app.use('/api/expenses', expensesRouter);
+  app.use('/api/inbox', inboxRouter);
   app.use('/api/invoices', invoicesRouter);
   app.use('/api/reports', reportsRouter);
 

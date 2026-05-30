@@ -1,22 +1,38 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Paperclip, Download } from 'lucide-react';
+import { Plus, Paperclip, Download, Inbox as InboxIcon, Trash2, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatMoney, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '@darrow/shared';
 import { PageHeader } from '@/components/Layout';
-import { Modal, Skeleton, Empty, Badge, toast } from '@/components/ui';
+import { Modal, Skeleton, Empty, Badge, Spinner, toast } from '@/components/ui';
 
 interface Expense { id: string; workDate: string; vendor: string; amount: string; category: string; invoiceId: string | null; attachment_count: number; }
 
 export function ExpensesPage() {
+  const [tab, setTab] = useState<'expenses' | 'inbox'>('expenses');
+  const { data: inbox } = useQuery({ queryKey: ['inbox'], queryFn: () => api.get<any[]>('/inbox'), refetchInterval: (q) => (q.state.data?.some((d: any) => d.status === 'pending') ? 2000 : false) });
+  return (
+    <div>
+      <PageHeader title="Expenses" subtitle="Job-related costs, receipts & the bill processing inbox" />
+      <div className="mb-5 flex gap-2 border-b border-line">
+        <button onClick={() => setTab('expenses')} className={`px-3 py-2 text-sm font-medium ${tab === 'expenses' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>Expenses</button>
+        <button onClick={() => setTab('inbox')} className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium ${tab === 'inbox' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>
+          <InboxIcon size={15} /> Inbox{inbox && inbox.length > 0 && <span className="rounded-full bg-copper px-1.5 text-xs text-white">{inbox.length}</span>}
+        </button>
+      </div>
+      {tab === 'expenses' ? <ExpenseList /> : <InboxTab />}
+    </div>
+  );
+}
+
+function ExpenseList() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['expenses'], queryFn: () => api.get<{ expenses: Expense[] }>('/expenses?pageSize=100') });
   const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState<Expense | null>(null);
   return (
     <div>
-      <PageHeader title="Expenses" subtitle="Job-related costs with receipt attachments"
-        actions={<button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New Expense</button>} />
+      <div className="mb-3 flex justify-end"><button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New Expense</button></div>
       {isLoading ? <Skeleton /> : !data?.expenses.length ? <Empty title="No expenses yet" /> : (
         <div className="card overflow-hidden">
           <table className="w-full">
@@ -104,5 +120,127 @@ function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onCl
         </div>
       </div>
     </Modal>
+  );
+}
+
+interface InboxDoc { id: string; original_filename: string; status: string; file_size_bytes: number; created_at: string; }
+
+function InboxTab() {
+  const qc = useQueryClient();
+  const { data: docs, isLoading } = useQuery({
+    queryKey: ['inbox'],
+    queryFn: () => api.get<InboxDoc[]>('/inbox'),
+    refetchInterval: (q) => (q.state.data?.some((d) => d.status === 'pending') ? 2000 : false),
+  });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['inbox'] });
+
+  async function upload(files: FileList | File[]) {
+    const arr = Array.from(files);
+    if (!arr.length) return;
+    setUploading(true);
+    try {
+      const res = await api.uploadMany<{ created: InboxDoc[]; rejected: { filename: string; reason: string }[] }>('/inbox', arr);
+      if (res.rejected.length) toast(`${res.rejected.length} file(s) rejected: ${res.rejected[0].reason}`, 'err');
+      if (res.created.length) toast(`Uploaded ${res.created.length} bill(s)`);
+      invalidate();
+    } catch (e: any) { toast(e.message, 'err'); }
+    finally { setUploading(false); }
+  }
+
+  const selected = docs?.find((d) => d.id === selectedId) ?? null;
+  function advance(removedId: string) {
+    const remaining = (docs ?? []).filter((d) => d.id !== removedId);
+    setSelectedId(remaining[0]?.id ?? null);
+  }
+
+  return (
+    <div>
+      <div
+        className="mb-4 flex items-center justify-center gap-3 rounded-xl border-2 border-dashed border-line bg-card p-6 text-sm text-muted"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); upload(e.dataTransfer.files); }}
+        onPaste={(e) => { if (e.clipboardData.files.length) upload(e.clipboardData.files); }}
+        tabIndex={0}
+      >
+        <Upload size={18} />
+        <span>Drag bills here, paste from clipboard, or</span>
+        <button className="btn-ghost" onClick={() => fileRef.current?.click()} disabled={uploading}>{uploading ? 'Uploading…' : 'choose files'}</button>
+        <input ref={fileRef} type="file" multiple className="hidden" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic" onChange={(e) => e.target.files && upload(e.target.files)} />
+      </div>
+
+      {isLoading ? <Skeleton rows={4} /> : !docs?.length ? <Empty title="The inbox is empty" hint="Upload bills above, then enter their details" /> : (
+        <div className="grid grid-cols-[260px_1fr] gap-4">
+          <div className="space-y-2">
+            {docs.map((d) => (
+              <button key={d.id} onClick={() => setSelectedId(d.id)} className={`flex w-full items-center gap-2 rounded-lg border p-2 text-left text-sm ${selectedId === d.id ? 'border-copper bg-copper-soft' : 'border-line bg-card hover:bg-paper'}`}>
+                {d.status === 'ready' ? (
+                  <img src={`/api/inbox/${d.id}/preview`} alt="" className="h-12 w-9 rounded border border-line object-cover" onError={(e) => ((e.target as HTMLImageElement).style.visibility = 'hidden')} />
+                ) : d.status === 'pending' ? <div className="grid h-12 w-9 place-items-center"><Spinner /></div> : <div className="grid h-12 w-9 place-items-center text-red"><Paperclip size={16} /></div>}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">{d.original_filename}</div>
+                  <Badge status={d.status}>{d.status}</Badge>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {!selected ? <div className="card grid place-items-center text-muted">Select a bill to enter its details</div> : (
+            <div className="grid grid-cols-2 gap-4">
+              <InboxEntryForm key={selected.id} doc={selected} onProcessed={() => { invalidate(); advance(selected.id); qc.invalidateQueries({ queryKey: ['expenses'] }); }} onDeleted={() => { invalidate(); advance(selected.id); }} />
+              <div className="card overflow-hidden">
+                {selected.status === 'ready' ? (
+                  <iframe title="bill preview" src={`/api/inbox/${selected.id}/download`} className="h-[70vh] w-full" />
+                ) : selected.status === 'pending' ? (
+                  <div className="grid h-[70vh] place-items-center text-muted"><Spinner /><span className="ml-2">Converting…</span></div>
+                ) : (
+                  <div className="grid h-[70vh] place-items-center gap-2 text-center">
+                    <span className="text-red">Conversion failed</span>
+                    <button className="btn-ghost" onClick={() => api.post(`/inbox/${selected.id}/retry`).then(invalidate)}>Retry</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InboxEntryForm({ doc, onProcessed, onDeleted }: { doc: InboxDoc; onProcessed: () => void; onDeleted: () => void }) {
+  const { data: jobs } = useQuery({ queryKey: ['jobs-active'], queryFn: () => api.get<{ jobs: any[] }>('/jobs?active=true&pageSize=300') });
+  const guessVendor = doc.original_filename.replace(/\.[^.]+$/, '').slice(0, 60);
+  const [f, setF] = useState({ work_date: new Date().toISOString().slice(0, 10), job_id: '', vendor: guessVendor, amount: '', category: 'materials', reference: '', description: '' });
+  const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
+  const process = useMutation({
+    mutationFn: () => api.post(`/inbox/${doc.id}/process`, { ...f, amount: Number(f.amount), reference: f.reference || undefined, description: f.description || undefined }),
+    onSuccess: () => { toast('Saved as expense'); onProcessed(); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+  const del = useMutation({ mutationFn: () => api.del(`/inbox/${doc.id}`), onSuccess: () => { toast('Bill discarded'); onDeleted(); }, onError: (e: any) => toast(e.message, 'err') });
+  const ready = doc.status === 'ready';
+  return (
+    <div className="card space-y-3 p-4">
+      <div className="text-sm font-semibold">Expense details</div>
+      <div className="grid grid-cols-2 gap-2">
+        <div><label className="label">Date</label><input type="date" className="input" value={f.work_date} onChange={set('work_date')} /></div>
+        <div><label className="label">Amount</label><input className="input" value={f.amount} onChange={set('amount')} /></div>
+      </div>
+      <div><label className="label">Job</label><select className="input" value={f.job_id} onChange={set('job_id')}><option value="">Select…</option>{jobs?.jobs.map((j) => <option key={j.id} value={j.id}>{j.code} — {j.description}</option>)}</select></div>
+      <div className="grid grid-cols-2 gap-2">
+        <div><label className="label">Vendor</label><input className="input" value={f.vendor} onChange={set('vendor')} /></div>
+        <div><label className="label">Category</label><select className="input" value={f.category} onChange={set('category')}>{EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{EXPENSE_CATEGORY_LABELS[c]}</option>)}</select></div>
+      </div>
+      <div><label className="label">Reference</label><input className="input" value={f.reference} onChange={set('reference')} placeholder="vendor invoice #" /></div>
+      <div><label className="label">Description</label><input className="input" value={f.description} onChange={set('description')} /></div>
+      {!ready && <p className="text-xs text-amber">This bill is still converting; you can save once it's ready.</p>}
+      <div className="flex items-center justify-between pt-1">
+        <button className="btn-ghost text-red" onClick={() => del.mutate()} disabled={del.isPending}><Trash2 size={15} /> Discard</button>
+        <button className="btn-primary" onClick={() => process.mutate()} disabled={!ready || !f.job_id || !f.vendor || !f.amount || process.isPending}>Save expense →</button>
+      </div>
+    </div>
   );
 }

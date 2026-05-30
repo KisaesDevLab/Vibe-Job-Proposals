@@ -237,6 +237,52 @@ d('API integration', () => {
     expect(onlyE1[0].jobs[0].job_code).toBe(`D26EW${suffix}`);
   });
 
+  // ---- Bill processing inbox ----
+  it('uploads a bill to the inbox and processes it into an expense', async () => {
+    const { PDFDocument } = await import('pdf-lib');
+    const pdf = await PDFDocument.create();
+    pdf.addPage([200, 200]);
+    const pdfBuf = Buffer.from(await pdf.save());
+
+    const up = await H(agent.post('/api/inbox')).attach('files', pdfBuf, 'bill.pdf');
+    expect(up.status).toBe(201);
+    expect(up.body.data.created[0].status).toBe('ready');
+    const docId = up.body.data.created[0].id;
+
+    const list = (await agent.get('/api/inbox')).body.data;
+    expect(list.some((d: any) => d.id === docId)).toBe(true);
+    expect((await agent.get(`/api/inbox/${docId}/download`)).status).toBe(200);
+
+    // need a job to attach the expense to
+    const [lvl] = await sql`SELECT id FROM rate_levels WHERE name='Journeyman'`;
+    void lvl;
+    const cust = (await H(agent.post('/api/customers')).send({ name: `Inbox Co ${suffix}`, bill_to_address1: '1', bill_to_city: 'J', bill_to_state: 'MO', bill_to_zip: '64801' })).body.data;
+    const job = (await H(agent.post('/api/jobs')).send({ code: `D26IB${suffix}`, customer_id: cust.id, description: 'inbox' })).body.data;
+
+    const proc = await H(agent.post(`/api/inbox/${docId}/process`)).send({ work_date: '2024-06-03', job_id: job.id, vendor: 'Acme Supply', amount: 123.45, category: 'materials' });
+    expect(proc.status).toBe(201);
+    const expId = proc.body.data.expense.id;
+
+    // expense exists with a ready attachment, inbox row gone
+    const exp = (await agent.get(`/api/expenses/${expId}`)).body.data;
+    expect(exp.vendor).toBe('Acme Supply');
+    expect(exp.attachments).toHaveLength(1);
+    expect(exp.attachments[0].status).toBe('ready');
+    expect((await agent.get(`/api/inbox/${docId}/download`)).status).toBe(404);
+    const after = (await agent.get('/api/inbox')).body.data;
+    expect(after.some((d: any) => d.id === docId)).toBe(false);
+  });
+
+  it('blocks processing a pending document and supports discard', async () => {
+    // a row with status pending (no real file) cannot be processed
+    const [doc] = await sql`INSERT INTO inbox_documents (original_filename, stored_path, content_type, file_size_bytes, status)
+      VALUES ('x.jpg', '/nope/x.jpg', 'image/jpeg', 10, 'pending') RETURNING id`;
+    const blocked = await H(agent.post(`/api/inbox/${doc.id}/process`)).send({ work_date: '2024-06-03', job_id: '00000000-0000-0000-0000-000000000000', vendor: 'v', amount: 1, category: 'materials' });
+    expect(blocked.status).toBe(409);
+    const del = await H(agent.del(`/api/inbox/${doc.id}`)).send({});
+    expect(del.status).toBe(200);
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');

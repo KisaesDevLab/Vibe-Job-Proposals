@@ -1,4 +1,5 @@
 import { startImageToPdfWorker } from './image-to-pdf.js';
+import { startInboxToPdfWorker } from './inbox-to-pdf.js';
 import { startRenderDocxWorker } from './render-docx.js';
 import { startDocxToPdfWorker } from './docx-to-pdf.js';
 import { startSendEmailWorker } from './send-email.js';
@@ -35,10 +36,11 @@ async function loSmoke(): Promise<void> {
 async function main() {
   await loSmoke();
   startImageToPdfWorker();
+  startInboxToPdfWorker();
   startRenderDocxWorker();
   startDocxToPdfWorker();
   startSendEmailWorker();
-  logger.info('workers started', { queues: ['image-to-pdf', 'render-docx', 'docx-to-pdf', 'send-invoice-email'] });
+  logger.info('workers started', { queues: ['image-to-pdf', 'inbox-to-pdf', 'render-docx', 'docx-to-pdf', 'send-invoice-email'] });
 }
 
 main().catch((err) => {

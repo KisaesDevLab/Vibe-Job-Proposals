@@ -330,3 +330,15 @@ export const invoiceEmails = pgTable('invoice_emails', {
   error: text('error'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const inboxDocuments = pgTable('inbox_documents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  originalFilename: text('original_filename').notNull(),
+  storedPath: text('stored_path').notNull(),
+  contentType: text('content_type').notNull(),
+  fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
+  status: attachmentStatus('status').notNull().default('pending'),
+  retryCount: integer('retry_count').notNull().default(0),
+  uploadedByUserId: uuid('uploaded_by_user_id').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

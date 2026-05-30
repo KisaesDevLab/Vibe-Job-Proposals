@@ -43,4 +43,9 @@ export const api = {
     fd.append(field, file);
     return request<T>('POST', p, fd);
   },
+  uploadMany: <T>(p: string, files: File[], field = 'files') => {
+    const fd = new FormData();
+    for (const f of files) fd.append(field, f);
+    return request<T>('POST', p, fd);
+  },
 };

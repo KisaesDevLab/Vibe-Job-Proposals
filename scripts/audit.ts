@@ -93,6 +93,25 @@ async function main() {
   // Phase 17 smtp test-connect
   check('smtp test-connect endpoint', [200, 400, 422, 503].includes((await H(agent.post('/api/settings/smtp/test')).send({ to: 'x@y.com' })).status), '(Phase 17)');
 
+  // Phase: bill processing inbox
+  const ib = await H(agent.post('/api/inbox')).attach('files', pdfBuf, 'bill.pdf');
+  check('inbox upload (pdf -> ready)', ib.status === 201 && ib.body.data.created[0]?.status === 'ready', `got ${ib.status}`);
+  const docId = ib.body?.data?.created?.[0]?.id;
+  if (docId) {
+    const list = await agent.get('/api/inbox');
+    check('inbox list contains the doc', list.body.data.some((d: any) => d.id === docId));
+    check('inbox preview thumbnail', (await agent.get(`/api/inbox/${docId}/preview`)).status === 200);
+    check('inbox download', (await agent.get(`/api/inbox/${docId}/download`)).status === 200);
+    const proc = await H(agent.post(`/api/inbox/${docId}/process`)).send({ work_date: '2024-06-03', job_id: job.id, vendor: 'Inbox Vendor', amount: 77.5, category: 'materials' });
+    check('inbox process -> expense', proc.status === 201 && !!proc.body.data.expense?.id, `got ${proc.status}`);
+    const expId = proc.body?.data?.expense?.id;
+    if (expId) {
+      const expDetail = await agent.get(`/api/expenses/${expId}`);
+      check('processed expense has a ready attachment', expDetail.body.data.attachments?.[0]?.status === 'ready');
+    }
+    check('inbox doc removed after processing (download 404)', (await agent.get(`/api/inbox/${docId}/download`)).status === 404);
+  }
+
   console.log(`\nAUDIT: ${pass} passed, ${fail} failed`);
   if (fail) console.log('FAILED:\n' + fails.map((f) => '  - ' + f).join('\n'));
   await sql.end();

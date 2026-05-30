@@ -217,3 +217,28 @@ week (complementing the all-crew grid).
   week. Reuses the same auto-save-on-blur, locked-when-billed cells, aria-labels, and
   row/day totals (shared `WeekTable`). No schema change — uses existing write endpoints.
 **Files:** `apps/api/src/routes/time.ts`, `apps/web/src/pages/Time.tsx`.
+
+---
+
+## Bill processing inbox (feature request)
+
+### Q7.1 — Upload bills first, then triage into expenses
+Requested a "processing box": upload bills, then click a file to see a preview with expense
+data-entry fields beside it. Confirmed decisions: **Inbox tab inside Expenses**, **remove
+the inbox record once processed**, **one expense per file** (v1).
+**Implemented:**
+- Migration `0014_inbox_documents.sql` + `inboxDocuments` table (reuses `attachment_status`).
+- `inbox-to-pdf` BullMQ worker reusing the pure `imageBufferToPdf`; images convert to a
+  uniform single-page PDF for preview (PDFs are ready immediately).
+- `/api/inbox` routes: multi-file upload (content-sniffed; HEIC gated by `hasHeicSupport`),
+  list, first-page PNG `preview` (gs+graphicsmagick), `download`, `retry`, transactional
+  `process` (create expense → copy file into the expense's attachments → delete the inbox
+  record; copy-then-delete so a failure leaves no dangling row), and `delete`.
+- Expenses page gains an **Inbox tab** with an unprocessed-count badge: dropzone
+  (drag/drop + paste + picker), a left rail of bills (thumbnail + status, pending spinner,
+  failed-retry), and a split work area — **entry fields on the left, large PDF preview
+  (iframe) on the right** — that saves into an expense and auto-advances.
+**Verification:** 57 tests (2 new inbox integration tests), `scripts/audit.ts` (32/32,
+incl. 7 inbox checks), a live image→PDF worker check, green gate, smoke. All pass.
+**Reuse:** `imageBufferToPdf`, the pdf2pic thumbnail block, `paths.*`, `expenseSchema` +
+future-date guard, `hasHeicSupport`, and the existing upload/polling/thumbnail UI patterns.
