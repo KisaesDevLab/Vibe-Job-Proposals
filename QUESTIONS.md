@@ -331,3 +331,19 @@ Two review agents (security + correctness) plus dynamic probing. Findings fixed:
 - Finalize rebuilds the preview just before the snapshot txn (a stale-bind window only
   under concurrent multi-tab editing) — acceptable for the single-admin deployment.
 - `trust proxy: 1` requires exactly one reverse proxy in front (documented in OPERATIONS).
+
+## Pre-production QA — pass 2 (review of pass-1 changes + frontend/importer)
+
+A focused pass-2 review confirmed the pass-1 fixes are regression-free (finalize-blocker
+details still surface, /time/cell merge correct, inbox process atomic, crypto guards,
+invoice-data id-joins, statfs guard) and found 5 smaller issues — all fixed:
+- **MED:** global SMTP PUT now refuses to store a password when `SMTP_ENC_KEY` is unset
+  (was throwing a 500 via `encryptSecret`) — mirrors the per-user guard.
+- **LOW-MED:** creating a job now invalidates `['jobs-active']` too, so it appears
+  immediately in the Time/Inbox job selectors.
+- **LOW:** public upload file-count cap unified to 10 (route + multer), client picker
+  capped at 10, and a `LIMIT_FILE_COUNT` → clear 400 branch added to the error handler.
+- **LOW:** saving a customer Profile invalidates `['customer', id]` (self-staleness).
+- **LOW:** the Time "Add row" button now requires a positive seed (a 0 seed silently
+  created nothing).
+Also added the **Change Password** UI and shipped `docs/` in the Docker runtime image.

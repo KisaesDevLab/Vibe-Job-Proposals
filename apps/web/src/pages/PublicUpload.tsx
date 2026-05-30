@@ -24,7 +24,11 @@ export function PublicUploadPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   function addFiles(list: FileList | File[]) {
-    setFiles((prev) => [...prev, ...Array.from(list)]);
+    setFiles((prev) => {
+      const next = [...prev, ...Array.from(list)];
+      if (next.length > 10) toast('Up to 10 files per upload; extra files were dropped', 'err');
+      return next.slice(0, 10);
+    });
   }
 
   async function submit() {

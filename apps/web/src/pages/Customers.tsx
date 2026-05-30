@@ -99,9 +99,10 @@ function ProfileTab({ customer, onChanged }: { customer: Customer; onChanged: ()
       active: data.active ?? true,
     });
   }
+  const qc = useQueryClient();
   const m = useMutation({
     mutationFn: () => api.put(`/customers/${customer.id}`, f),
-    onSuccess: () => { toast('Customer saved'); onChanged(); },
+    onSuccess: () => { toast('Customer saved'); qc.invalidateQueries({ queryKey: ['customer', customer.id] }); onChanged(); },
     onError: (e: any) => toast(e.message, 'err'),
   });
   if (isLoading || !f) return <Skeleton rows={5} />;

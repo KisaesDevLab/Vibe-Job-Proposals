@@ -208,8 +208,8 @@ function AddRow({ weekStart, onClose, onAdded }: { weekStart: string; onClose: (
       <div className="space-y-3">
         <div><label className="label">Employee</label><select className="input" value={employee_id} onChange={(e) => setEmp(e.target.value)}><option value="">Select…</option>{emps?.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
         <div><label className="label">Job</label><select className="input" value={job_id} onChange={(e) => setJob(e.target.value)}><option value="">Select…</option>{jobs?.jobs.map((j) => <option key={j.id} value={j.id}>{j.code} — {j.description}</option>)}</select></div>
-        <div><label className="label">Monday ST hours (seed)</label><input className="input" value={st} onChange={(e) => setSt(e.target.value)} /></div>
-        <div className="flex justify-end gap-2 pt-2"><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" onClick={add} disabled={!employee_id || !job_id}>Add</button></div>
+        <div><label className="label">Monday ST hours (seed)</label><input className="input" value={st} onChange={(e) => setSt(e.target.value)} /><p className="mt-1 text-xs text-muted">Enter a positive number to create the row; you can edit the rest in the grid.</p></div>
+        <div className="flex justify-end gap-2 pt-2"><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" onClick={add} disabled={!employee_id || !job_id || !(Number(st) > 0)}>Add</button></div>
       </div>
     </Modal>
   );

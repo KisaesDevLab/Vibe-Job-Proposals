@@ -15,8 +15,14 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
   if (err instanceof MulterError) {
+    const msg =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? 'File too large (max 25MB)'
+        : err.code === 'LIMIT_FILE_COUNT'
+          ? 'Too many files (max 10 per upload)'
+          : 'Upload error';
     const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
-    res.status(status).json(fail('upload_error', err.code === 'LIMIT_FILE_SIZE' ? 'File too large' : 'Upload error'));
+    res.status(status).json(fail('upload_error', msg));
     return;
   }
   if (err instanceof HttpError) {

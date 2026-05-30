@@ -40,7 +40,7 @@ export function JobsPage() {
           </table>
         </div>
       )}
-      {creating && <JobForm onClose={() => setCreating(false)} onSaved={() => { qc.invalidateQueries({ queryKey: ['jobs'] }); setCreating(false); }} />}
+      {creating && <JobForm onClose={() => setCreating(false)} onSaved={() => { qc.invalidateQueries({ queryKey: ['jobs'] }); qc.invalidateQueries({ queryKey: ['jobs-active'] }); setCreating(false); }} />}
     </div>
   );
 }

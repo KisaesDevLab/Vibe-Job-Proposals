@@ -61,7 +61,7 @@ publicRouter.get('/upload/check', (req, res) => {
 publicRouter.post(
   '/upload',
   uploadLimiter,
-  upload.array('files', 20),
+  upload.array('files', 10),
   ah(async (req, res) => {
     if (!config.PUBLIC_UPLOAD_TOKEN) return res.status(404).json(fail('disabled', 'Public uploads are disabled'));
     const token = req.query.k ?? req.get('x-upload-token');

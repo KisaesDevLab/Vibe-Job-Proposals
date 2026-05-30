@@ -162,8 +162,8 @@ settingsRouter.put(
         smtp_enabled: z.boolean().optional(),
       })
       .parse(req.body);
-    if (body.smtp_enabled && !process.env.SMTP_ENC_KEY) {
-      return res.status(400).json(fail('no_enc_key', 'SMTP_ENC_KEY must be set to enable SMTP'));
+    if ((body.smtp_enabled || body.smtp_password) && !process.env.SMTP_ENC_KEY) {
+      return res.status(400).json(fail('no_enc_key', 'SMTP_ENC_KEY must be set to store SMTP credentials'));
     }
     const enc = body.smtp_password ? encryptSecret(body.smtp_password) : undefined;
     await db
