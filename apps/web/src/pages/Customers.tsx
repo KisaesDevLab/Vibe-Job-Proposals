@@ -46,7 +46,7 @@ export function CustomersPage() {
 }
 
 function CustomerForm({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState({ name: '', bill_to_address1: '', bill_to_city: '', bill_to_state: '', bill_to_zip: '', contact_email: '' });
+  const [f, setF] = useState({ name: '', bill_to_address1: '', bill_to_address2: '', bill_to_city: '', bill_to_state: '', bill_to_zip: '', contact_name: '', contact_email: '', contact_phone: '' });
   const m = useMutation({ mutationFn: () => api.post('/customers', f), onSuccess: () => { toast('Customer created'); onSaved(); }, onError: (e: any) => toast(e.message, 'err') });
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
   return (
@@ -54,12 +54,17 @@ function CustomerForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
       <div className="space-y-3">
         <div><label className="label">Name</label><input className="input" value={f.name} onChange={set('name')} /></div>
         <div><label className="label">Address</label><input className="input" value={f.bill_to_address1} onChange={set('bill_to_address1')} /></div>
+        <div><label className="label">Address line 2</label><input className="input" value={f.bill_to_address2} onChange={set('bill_to_address2')} /></div>
         <div className="grid grid-cols-3 gap-2">
           <div><label className="label">City</label><input className="input" value={f.bill_to_city} onChange={set('bill_to_city')} /></div>
           <div><label className="label">State</label><input className="input" value={f.bill_to_state} onChange={set('bill_to_state')} /></div>
           <div><label className="label">Zip</label><input className="input" value={f.bill_to_zip} onChange={set('bill_to_zip')} /></div>
         </div>
-        <div><label className="label">Contact email</label><input className="input" value={f.contact_email} onChange={set('contact_email')} /></div>
+        <div className="grid grid-cols-3 gap-2">
+          <div><label className="label">Contact name</label><input className="input" value={f.contact_name} onChange={set('contact_name')} /></div>
+          <div><label className="label">Contact email</label><input className="input" value={f.contact_email} onChange={set('contact_email')} /></div>
+          <div><label className="label">Contact phone</label><input className="input" value={f.contact_phone} onChange={set('contact_phone')} /></div>
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={() => m.mutate()} disabled={!f.name || m.isPending}>Save</button>
@@ -70,16 +75,55 @@ function CustomerForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 }
 
 function CustomerDrawer({ customer, onClose, onChanged }: { customer: Customer; onClose: () => void; onChanged: () => void }) {
-  const [tab, setTab] = useState<'markups' | 'schedules'>('schedules');
+  const [tab, setTab] = useState<'profile' | 'markups' | 'schedules'>('profile');
   return (
     <Modal open onClose={onClose} title={customer.name} wide>
       <div className="mb-4 flex gap-2 border-b border-line">
-        {(['schedules', 'markups'] as const).map((t) => (
+        {(['profile', 'schedules', 'markups'] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm font-medium capitalize ${tab === t ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>{t}</button>
         ))}
       </div>
-      {tab === 'markups' ? <MarkupsTab customer={customer} onChanged={onChanged} /> : <SchedulesTab customer={customer} />}
+      {tab === 'profile' ? <ProfileTab customer={customer} onChanged={onChanged} /> : tab === 'markups' ? <MarkupsTab customer={customer} onChanged={onChanged} /> : <SchedulesTab customer={customer} />}
     </Modal>
+  );
+}
+
+function ProfileTab({ customer, onChanged }: { customer: Customer; onChanged: () => void }) {
+  const { data, isLoading } = useQuery({ queryKey: ['customer', customer.id], queryFn: () => api.get<any>(`/customers/${customer.id}`) });
+  const [f, setF] = useState<any>(null);
+  if (data && !f) {
+    setF({
+      name: data.name ?? '', bill_to_address1: data.billToAddress1 ?? '', bill_to_address2: data.billToAddress2 ?? '',
+      bill_to_city: data.billToCity ?? '', bill_to_state: data.billToState ?? '', bill_to_zip: data.billToZip ?? '',
+      contact_name: data.contactName ?? '', contact_email: data.contactEmail ?? '', contact_phone: data.contactPhone ?? '',
+      active: data.active ?? true,
+    });
+  }
+  const m = useMutation({
+    mutationFn: () => api.put(`/customers/${customer.id}`, f),
+    onSuccess: () => { toast('Customer saved'); onChanged(); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+  if (isLoading || !f) return <Skeleton rows={5} />;
+  const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
+  return (
+    <div className="space-y-3">
+      <div><label className="label">Name</label><input className="input" value={f.name} onChange={set('name')} /></div>
+      <div><label className="label">Bill-to address</label><input className="input" value={f.bill_to_address1} onChange={set('bill_to_address1')} /></div>
+      <div><label className="label">Address line 2</label><input className="input" value={f.bill_to_address2} onChange={set('bill_to_address2')} /></div>
+      <div className="grid grid-cols-3 gap-2">
+        <div><label className="label">City</label><input className="input" value={f.bill_to_city} onChange={set('bill_to_city')} /></div>
+        <div><label className="label">State</label><input className="input" value={f.bill_to_state} onChange={set('bill_to_state')} /></div>
+        <div><label className="label">Zip</label><input className="input" value={f.bill_to_zip} onChange={set('bill_to_zip')} /></div>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div><label className="label">Contact name</label><input className="input" value={f.contact_name} onChange={set('contact_name')} /></div>
+        <div><label className="label">Contact email</label><input className="input" value={f.contact_email} onChange={set('contact_email')} placeholder="used as default invoice recipient" /></div>
+        <div><label className="label">Contact phone</label><input className="input" value={f.contact_phone} onChange={set('contact_phone')} /></div>
+      </div>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> Active</label>
+      <button className="btn-primary" onClick={() => m.mutate()} disabled={!f.name || m.isPending}>Save profile</button>
+    </div>
   );
 }
 

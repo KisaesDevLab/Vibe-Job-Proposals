@@ -65,7 +65,7 @@ invoicesRouter.get(
   ah(async (req, res) => {
     const [inv] = await rawsql<any[]>`
       SELECT i.*, j.code AS job_code, j.description AS job_description, j.billing_type, j.po_number,
-             c.id AS customer_id, c.name AS customer_name
+             c.id AS customer_id, c.name AS customer_name, c.contact_email AS customer_contact_email
       FROM invoices i JOIN jobs j ON j.id=i.job_id JOIN customers c ON c.id=j.customer_id WHERE i.id=${req.params.id}`;
     if (!inv) throw new HttpError(404, 'not_found', 'Invoice not found');
     if (inv.status === 'draft') {

@@ -312,6 +312,24 @@ d('API integration', () => {
     expect(doc.source).toBe('public');
   });
 
+  // ---- Customer profile/contact editing ----
+  it('creates and edits a customer contact (email/name/phone)', async () => {
+    const cust = (await H(agent.post('/api/customers')).send({
+      name: `Contact Co ${suffix}`, bill_to_address1: '1 A', bill_to_city: 'Joplin', bill_to_state: 'MO', bill_to_zip: '64801',
+      contact_name: 'Pat Buyer', contact_email: 'PAT@Buyer.COM', contact_phone: '4175551212',
+    })).body.data;
+    // create stores + lowercases email
+    let got = (await agent.get(`/api/customers/${cust.id}`)).body.data;
+    expect(got.contactName).toBe('Pat Buyer');
+    expect(got.contactEmail).toBe('pat@buyer.com');
+    // edit it
+    await H(agent.put(`/api/customers/${cust.id}`)).send({ name: got.name, bill_to_address1: 'X', bill_to_city: 'J', bill_to_state: 'MO', bill_to_zip: '64801', contact_name: 'New Person', contact_email: 'new@buyer.com', contact_phone: '4175559999' });
+    got = (await agent.get(`/api/customers/${cust.id}`)).body.data;
+    expect(got.contactName).toBe('New Person');
+    expect(got.contactEmail).toBe('new@buyer.com');
+    expect(got.contactPhone).toBe('4175559999');
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');

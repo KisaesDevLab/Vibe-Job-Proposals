@@ -272,3 +272,18 @@ only** (no submitter name).
 **Verification:** 58 tests (new public integration test: no-token 401, valid-token 201,
 lands in inbox with code/notes/source), `scripts/audit.ts` 37/37 (5 new public checks),
 green gate, smoke. Token compared in constant time; disabled unless configured.
+
+---
+
+## Customer contact editing (gap fix)
+
+### Q9.1 — Edit customer email/contact after creation
+The new-customer form only exposed Contact email, and the customer drawer had no Profile
+tab, so contact details couldn't be edited after creation (the API already supported it).
+**Implemented:**
+- Create form now also captures **address line 2, contact name, contact phone**.
+- Customer drawer gains a default **Profile tab** (name, bill-to address lines, city/state/
+  zip, contact name/email/phone, active) saving via `PUT /api/customers/:id`.
+- Invoice detail now returns `customer_contact_email`, so the **Email Invoice** modal
+  pre-fills the customer's email as the recipient.
+**Verification:** 59 tests (new customer contact create/edit test), green gate, smoke.

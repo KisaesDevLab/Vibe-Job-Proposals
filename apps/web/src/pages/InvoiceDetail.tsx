@@ -66,7 +66,7 @@ export function InvoiceDetailPage({ id }: { id: string }) {
 function EmailModal({ id, inv, onClose }: { id: string; inv: any; onClose: () => void }) {
   const { data: history, refetch } = useQuery({ queryKey: ['invoice-emails', id], queryFn: () => api.get<any[]>(`/invoices/${id}/emails`) });
   const [f, setF] = useState({
-    to: inv.customer?.contact_email ?? inv.contact_email ?? '',
+    to: inv.customer_contact_email ?? '',
     subject: `Invoice ${inv.billed_reference} from ${inv.company_name ?? 'Darrow Electric'}`,
     body: `Please find attached invoice ${inv.billed_reference} totaling ${formatMoney(inv.grand_total)}.`,
     include_docx: true,
