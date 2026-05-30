@@ -38,6 +38,8 @@ COPY --from=build /app/packages ./packages
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY --from=build /app/scripts ./scripts
+# docs/ holds runtime-served assets (example-template.docx, PLACEHOLDERS.md)
+COPY --from=build /app/docs ./docs
 COPY --from=build /app/docker/entrypoint.sh ./docker/entrypoint.sh
 COPY package.json ./
 

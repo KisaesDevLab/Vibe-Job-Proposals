@@ -11,12 +11,14 @@ import {
   Settings as SettingsIcon,
   LogOut,
   Mail,
+  KeyRound,
   Zap,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { UserEmailModal } from './UserEmailModal';
+import { ChangePasswordModal } from './ChangePasswordModal';
 
 const NAV = [
   { group: 'Operations', items: [
@@ -40,6 +42,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const { user, refresh } = useAuth();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const [emailOpen, setEmailOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
 
   async function logout() {
     await api.post('/auth/logout');
@@ -84,6 +87,9 @@ export function Layout({ children }: { children: ReactNode }) {
               <div className="text-sm font-medium">{user?.username}</div>
               <div className="text-xs capitalize text-paper/50">{user?.role}</div>
             </div>
+            <button onClick={() => setPwOpen(true)} title="Change password" className="rounded p-1.5 text-paper/60 hover:bg-white/10 hover:text-white">
+              <KeyRound size={16} />
+            </button>
             <button onClick={() => setEmailOpen(true)} title="My email settings" className="rounded p-1.5 text-paper/60 hover:bg-white/10 hover:text-white">
               <Mail size={16} />
             </button>
@@ -94,6 +100,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <UserEmailModal open={emailOpen} onClose={() => setEmailOpen(false)} />
+      <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-7xl px-8 py-8">{children}</div>
       </main>

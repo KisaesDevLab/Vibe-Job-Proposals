@@ -366,6 +366,17 @@ d('API integration', () => {
     expect(Number(n)).toBe(1);
   });
 
+  // ---- Change password ----
+  it('changes the password with validation', async () => {
+    const PW = 'integration-test-pw-123456';
+    expect((await H(agent.post('/api/auth/change-password')).send({ currentPassword: 'wrong', newPassword: 'a-new-strong-pw-1' })).status).toBe(400);
+    expect((await H(agent.post('/api/auth/change-password')).send({ currentPassword: PW, newPassword: 'short' })).status).toBe(400);
+    const ok = await H(agent.post('/api/auth/change-password')).send({ currentPassword: PW, newPassword: 'a-new-strong-pw-1' });
+    expect(ok.status).toBe(200);
+    // change it back so the suite's known password still works
+    expect((await H(agent.post('/api/auth/change-password')).send({ currentPassword: 'a-new-strong-pw-1', newPassword: PW })).status).toBe(200);
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');
