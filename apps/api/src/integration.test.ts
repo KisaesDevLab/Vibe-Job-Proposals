@@ -218,6 +218,25 @@ d('API integration', () => {
     expect(u.smtp_password_enc).toMatch(/.+:.+:.+/);
   });
 
+  // ---- Phase 9 extension: per-employee week filter ----
+  it('filters the weekly time view by employee', async () => {
+    const [lvl] = await sql`SELECT id FROM rate_levels WHERE name='Journeyman'`;
+    const cust = (await H(agent.post('/api/customers')).send({ name: `EW ${suffix}`, bill_to_address1: '1', bill_to_city: 'J', bill_to_state: 'MO', bill_to_zip: '64801' })).body.data;
+    const job = (await H(agent.post('/api/jobs')).send({ code: `D26EW${suffix}`, customer_id: cust.id, description: 'ew' })).body.data;
+    const e1 = (await H(agent.post('/api/employees')).send({ name: `EW One ${suffix}`, level_id: lvl.id })).body.data;
+    const e2 = (await H(agent.post('/api/employees')).send({ name: `EW Two ${suffix}`, level_id: lvl.id })).body.data;
+    await H(agent.post('/api/time/entries')).send({ employee_id: e1.id, job_id: job.id, work_date: '2024-07-01', st_hours: 8, ot_hours: 0, dt_hours: 0 });
+    await H(agent.post('/api/time/entries')).send({ employee_id: e2.id, job_id: job.id, work_date: '2024-07-01', st_hours: 5, ot_hours: 0, dt_hours: 0 });
+
+    const all = (await agent.get('/api/time/week?week_start=2024-07-01')).body.data.employees;
+    expect(all.filter((x: any) => x.employee_id === e1.id || x.employee_id === e2.id).length).toBe(2);
+
+    const onlyE1 = (await agent.get(`/api/time/week?week_start=2024-07-01&employee_id=${e1.id}`)).body.data.employees;
+    expect(onlyE1).toHaveLength(1);
+    expect(onlyE1[0].employee_id).toBe(e1.id);
+    expect(onlyE1[0].jobs[0].job_code).toBe(`D26EW${suffix}`);
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');

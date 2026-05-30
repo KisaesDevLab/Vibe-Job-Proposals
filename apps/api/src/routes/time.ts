@@ -18,6 +18,7 @@ timeRouter.get(
   ah(async (req, res) => {
     const weekStart = (req.query.week_start as string) ?? new Date().toISOString().slice(0, 10);
     const weekEnd = addDays(weekStart, 6);
+    const employeeId = (req.query.employee_id as string) || null;
     const rows = await rawsql<any[]>`
       SELECT te.id, te.employee_id, e.name AS employee_name, te.job_id, j.code AS job_code,
              te.work_date::text AS work_date, te.st_hours, te.ot_hours, te.dt_hours, te.invoice_id,
@@ -27,6 +28,7 @@ timeRouter.get(
       JOIN jobs j ON j.id = te.job_id
       LEFT JOIN invoices inv ON inv.id = te.invoice_id
       WHERE te.work_date BETWEEN ${weekStart}::date AND ${weekEnd}::date
+        AND (${employeeId}::uuid IS NULL OR te.employee_id = ${employeeId}::uuid)
       ORDER BY e.name, j.code, te.work_date`;
     const byEmp = new Map<string, any>();
     for (const r of rows) {

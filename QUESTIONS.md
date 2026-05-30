@@ -202,3 +202,18 @@ envelope is `MAIL FROM:<alice@firm.test>`, `From: Alice Field <alice@firm.test>`
 `Reply-To: alice@firm.test`.
 **Caveat (documented):** when a user only sets a From address and rides the shared relay,
 the mail may fail SPF/DKIM unless the relay is authorized to send as that address.
+
+---
+
+## Secondary time-entry mode (feature request)
+
+### Q6.1 — Per-employee weekly time entry
+Requested a second entry mode: select an employee, then enter job codes + hours for the
+week (complementing the all-crew grid).
+**Implemented:**
+- `GET /api/time/week` gained an optional `employee_id` filter (integration-tested).
+- Time page now has a **"All Crew" / "By Employee"** toggle. By-Employee mode: pick an
+  employee, add jobs via a "+ Add job code…" selector, and enter ST/OT/DT per day for the
+  week. Reuses the same auto-save-on-blur, locked-when-billed cells, aria-labels, and
+  row/day totals (shared `WeekTable`). No schema change — uses existing write endpoints.
+**Files:** `apps/api/src/routes/time.ts`, `apps/web/src/pages/Time.tsx`.
