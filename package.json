@@ -31,7 +31,8 @@
     "bootstrap": "tsx scripts/bootstrap-admin.ts",
     "import:xlsm": "tsx scripts/import-xlsm.ts",
     "smoke": "tsx scripts/smoke.ts",
-    "prepare": "husky || true"
+    "prepare": "husky || true",
+    "verify:email": "tsx scripts/verify-email.ts"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

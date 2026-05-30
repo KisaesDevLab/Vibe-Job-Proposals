@@ -176,3 +176,29 @@ contexts.
 `dockerd` runs in this environment and both compose files validate, but base-image pulls
 hit Docker Hub's unauthenticated rate limit, so a full `docker build` still cannot complete
 here. Unchanged from Q3.2 — an environment constraint, not a defect.
+
+---
+
+## Per-user SMTP (feature request)
+
+### Q5.1 — Per-user invoice email sender
+Requested: invoice emails should appear to come directly from the sending user. Chosen
+model (user): **"both, with fallback."**
+**Implemented:**
+- Migration `0013_user_smtp.sql` adds per-user SMTP columns to `users` (host/port/user/
+  password_enc/from_address/from_name/enabled); password encrypted with AES-256-GCM
+  (`apps/api/src/crypto.ts`, reused `SMTP_ENC_KEY`).
+- Pure resolver `resolveSmtp(user, global)` (`packages/shared/src/smtp.ts`, 5 unit tests):
+  uses full per-user credentials when the user has an enabled host; otherwise rides the
+  company relay but keeps the user's From address; falls back entirely to the global relay;
+  errors if neither is usable.
+- `/api/auth/smtp` GET/PUT/test (per-user; password redacted from GET, integration-tested).
+- `send-invoice-email` worker resolves the sender per email (`sent_by_user_id`), decrypts
+  the chosen source's password, sets `From` + `Reply-To` to the user, and sends.
+- UI: "My Email" modal (sidebar mail icon) for personal SMTP; "Email" button + compose
+  modal + send-history on the invoice detail page.
+**Verified end to end** (`scripts/verify-email.ts`, in-process SMTP sink): the captured
+envelope is `MAIL FROM:<alice@firm.test>`, `From: Alice Field <alice@firm.test>`,
+`Reply-To: alice@firm.test`.
+**Caveat (documented):** when a user only sets a From address and rides the shared relay,
+the mail may fail SPF/DKIM unless the relay is authorized to send as that address.

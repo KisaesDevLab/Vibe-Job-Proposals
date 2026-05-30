@@ -48,6 +48,14 @@ export const users = pgTable('users', {
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+  // Per-user SMTP sender settings (migration 0013).
+  smtpHost: text('smtp_host'),
+  smtpPort: integer('smtp_port'),
+  smtpUser: text('smtp_user'),
+  smtpPasswordEnc: text('smtp_password_enc'),
+  smtpFromAddress: text('smtp_from_address'),
+  smtpFromName: text('smtp_from_name'),
+  smtpEnabled: boolean('smtp_enabled').notNull().default(false),
 });
 
 export const auditLog = pgTable('audit_log', {

@@ -192,6 +192,32 @@ d('API integration', () => {
     expect(rows[1].t).toBeNull(); // new one open-ended
   });
 
+  // ---- Per-user SMTP settings (Phase 17 extension) ----
+  it('stores per-user SMTP settings and never returns the password', async () => {
+    const put = await H(agent.put('/api/auth/smtp')).send({
+      smtp_host: 'smtp.example.com',
+      smtp_port: 587,
+      smtp_user: 'itest@example.com',
+      smtp_password: 'super-secret',
+      smtp_from_address: 'itest@example.com',
+      smtp_from_name: 'Integration Tester',
+      smtp_enabled: true,
+    });
+    expect(put.status).toBe(200);
+    const get = await agent.get('/api/auth/smtp');
+    expect(get.body.data.smtp_host).toBe('smtp.example.com');
+    expect(get.body.data.smtp_from_address).toBe('itest@example.com');
+    expect(get.body.data.smtp_password_set).toBe(true);
+    // password (encrypted or plain) must never be exposed
+    expect(JSON.stringify(get.body.data)).not.toContain('super-secret');
+    expect('smtp_password' in get.body.data).toBe(false);
+    expect('smtp_password_enc' in get.body.data).toBe(false);
+    // and the encrypted value is actually stored
+    const [u] = await sql`SELECT smtp_password_enc, smtp_enabled FROM users WHERE username='itest'`;
+    expect(u.smtp_enabled).toBe(true);
+    expect(u.smtp_password_enc).toMatch(/.+:.+:.+/);
+  });
+
   it('logs out and clears the session', async () => {
     await H(agent.post('/api/auth/logout')).send({});
     const me = await agent.get('/api/auth/me');

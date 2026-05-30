@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { ArrowLeft, Download, FileText, Ban, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Download, FileText, Ban, RefreshCw, Mail } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatMoney } from '@darrow/shared';
 import { Skeleton, Badge, Modal, toast } from '@/components/ui';
@@ -18,6 +18,7 @@ export function InvoiceDetailPage({ id }: { id: string }) {
     },
   });
   const [voiding, setVoiding] = useState(false);
+  const [emailing, setEmailing] = useState(false);
 
   const finalize = useMutation({
     mutationFn: () => api.post(`/invoices/${id}/finalize`),
@@ -46,6 +47,7 @@ export function InvoiceDetailPage({ id }: { id: string }) {
             <>
               <a className="btn-ghost" href={`/api/invoices/${id}/docx`}><FileText size={15} /> DOCX</a>
               <a className="btn-ghost" href={`/api/invoices/${id}/pdf`}><Download size={15} /> PDF</a>
+              <button className="btn-ghost" onClick={() => setEmailing(true)}><Mail size={15} /> Email</button>
               <button className="btn-ghost" onClick={() => api.post(`/invoices/${id}/regenerate`).then(() => { toast('Regenerating'); qc.invalidateQueries({ queryKey: ['invoice', id] }); })}><RefreshCw size={15} /></button>
               <button className="btn-danger" onClick={() => setVoiding(true)}><Ban size={15} /> Void</button>
             </>
@@ -56,7 +58,55 @@ export function InvoiceDetailPage({ id }: { id: string }) {
       {isDraft ? <DraftView id={id} data={data} /> : <SnapshotView inv={inv} lines={data.line_items} />}
 
       {voiding && <VoidModal id={id} reference={inv.billed_reference} onClose={() => setVoiding(false)} onVoided={() => { setVoiding(false); qc.invalidateQueries({ queryKey: ['invoice', id] }); }} />}
+      {emailing && <EmailModal id={id} inv={inv} onClose={() => setEmailing(false)} />}
     </div>
+  );
+}
+
+function EmailModal({ id, inv, onClose }: { id: string; inv: any; onClose: () => void }) {
+  const { data: history, refetch } = useQuery({ queryKey: ['invoice-emails', id], queryFn: () => api.get<any[]>(`/invoices/${id}/emails`) });
+  const [f, setF] = useState({
+    to: inv.customer?.contact_email ?? inv.contact_email ?? '',
+    subject: `Invoice ${inv.billed_reference} from ${inv.company_name ?? 'Darrow Electric'}`,
+    body: `Please find attached invoice ${inv.billed_reference} totaling ${formatMoney(inv.grand_total)}.`,
+    include_docx: true,
+    include_pdf: true,
+  });
+  const send = useMutation({
+    mutationFn: () => api.post(`/invoices/${id}/email`, { to: f.to, cc: [], subject: f.subject, body: f.body, include_docx: f.include_docx, include_pdf: f.include_pdf }),
+    onSuccess: () => { toast('Email queued — sent from your address'); refetch(); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+  return (
+    <Modal open onClose={onClose} title={`Email ${inv.billed_reference}`} wide>
+      <div className="space-y-3">
+        <p className="text-xs text-muted">Sends from your personal email settings (or the company relay as a fallback). Configure yours via the mail icon in the sidebar.</p>
+        <div><label className="label">To</label><input className="input" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} /></div>
+        <div><label className="label">Subject</label><input className="input" value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} /></div>
+        <div><label className="label">Body</label><textarea className="input h-28" value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></div>
+        <div className="flex gap-4 text-sm">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={f.include_pdf} onChange={(e) => setF({ ...f, include_pdf: e.target.checked })} /> attach PDF</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={f.include_docx} onChange={(e) => setF({ ...f, include_docx: e.target.checked })} /> attach DOCX</label>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button className="btn-ghost" onClick={onClose}>Close</button>
+          <button className="btn-primary" onClick={() => send.mutate()} disabled={!f.to || (!f.include_docx && !f.include_pdf) || send.isPending}>Send</button>
+        </div>
+        {!!history?.length && (
+          <div className="mt-2 border-t border-line pt-2">
+            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Send history</div>
+            <div className="space-y-1">
+              {history.map((h) => (
+                <div key={h.id} className="flex items-center justify-between text-sm">
+                  <span>{h.toAddress}</span>
+                  <span>{h.sentAt ? <Badge status="finalized">sent</Badge> : h.error ? <Badge status="failed">failed</Badge> : <Badge status="pending">queued</Badge>}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
