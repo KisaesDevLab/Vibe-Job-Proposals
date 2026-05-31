@@ -5,6 +5,7 @@ build/
 .env.local
 /storage/
 storage/
+.storage/
 *.log
 .DS_Store
 coverage/
@@ -13,10 +14,8 @@ docs/FIRST_RUN.md
 playwright-report/
 test-results/
 *.tsbuildinfo
+.husky/_/
 
 # Redis persistence (dev)
 dump.rdb
 *.rdb
-
-.husky/_/
-.storage/
