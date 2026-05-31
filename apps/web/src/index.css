@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body { @apply bg-paper text-ink antialiased; font-feature-settings: 'tnum' 1; }
+}
+@layer components {
+  .btn { @apply inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed; }
+  .btn-primary { @apply btn bg-copper text-white hover:bg-copper-deep; }
+  .btn-ghost { @apply btn border border-line bg-card hover:bg-paper; }
+  .btn-danger { @apply btn bg-red text-white hover:opacity-90; }
+  .card { @apply rounded-xl border border-line bg-card shadow-card; }
+  .input { @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-copper focus:ring-1 focus:ring-copper; }
+  .label { @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-muted; }
+  .th { @apply px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted; }
+  .td { @apply px-3 py-2 text-sm border-t border-line; }
+  .badge { @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium; }
+  .navlink { @apply flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-paper/80 hover:bg-white/10 hover:text-white transition-colors; }
+  .navlink-active { @apply bg-copper text-white hover:bg-copper hover:text-white; }
+}

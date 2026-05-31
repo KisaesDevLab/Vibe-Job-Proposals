@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+/storage/
+storage/
+.storage/
+*.log
+.DS_Store
+coverage/
+.turbo/
+docs/FIRST_RUN.md
+playwright-report/
+test-results/
+*.tsbuildinfo
+.husky/_/
+
+# Redis persistence (dev)
+dump.rdb
+*.rdb

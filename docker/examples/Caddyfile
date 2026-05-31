@@ -1,0 +1,6 @@
+# HTTPS reverse proxy for Darrow Time & Invoicing (auto certificates).
+# Replace ti.example.com with your domain.
+ti.example.com {
+    encode gzip
+    reverse_proxy localhost:3000
+}

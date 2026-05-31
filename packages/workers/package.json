@@ -1,0 +1,27 @@
+{
+  "name": "@darrow/workers",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -b",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@darrow/db": "*",
+    "@darrow/shared": "*",
+    "bullmq": "^5.8.2",
+    "docxtemplater": "^3.47.3",
+    "ioredis": "^5.4.1",
+    "nodemailer": "^8.0.10",
+    "pdf-lib": "^1.17.1",
+    "pizzip": "^3.1.7",
+    "sharp": "^0.33.4",
+    "winston": "^3.13.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.15"
+  }
+}

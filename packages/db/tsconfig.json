@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "paths": { "@darrow/shared": ["../shared/src/index.ts"] }
+  },
+  "references": [{ "path": "../shared" }],
+  "include": ["src/**/*"]
+}
