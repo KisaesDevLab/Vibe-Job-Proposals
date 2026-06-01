@@ -170,7 +170,17 @@ export async function buildPackageData(invoiceId: string): Promise<PackageData> 
   // work_date → reference. The same sort key drives the attachment order at
   // the back of the package, so receipts appear in the same sequence as their
   // entries on the expense log page.
-  const expRows = await sql<any[]>`
+  //
+  // Source from the *snapshot* (invoice_line_items.expense_id) so the package
+  // stays consistent after the invoice is voided (which clears
+  // expenses.invoice_id). Fall back to live binding for pre-snapshot drafts.
+  const snapshotExp = await sql<any[]>`
+    SELECT DISTINCT e.id, e.work_date::text AS work_date, e.vendor, e.reference,
+                    e.amount, e.category, e.description
+    FROM invoice_line_items li
+    JOIN expenses e ON e.id = li.expense_id
+    WHERE li.invoice_id = ${invoiceId} AND li.line_type = 'expense' AND li.expense_id IS NOT NULL`;
+  const expRows = snapshotExp.length > 0 ? snapshotExp : await sql<any[]>`
     SELECT id, work_date::text AS work_date, vendor, reference, amount, category, description
     FROM expenses
     WHERE invoice_id = ${invoiceId}`;

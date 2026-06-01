@@ -179,6 +179,18 @@ invoicesRouter.post(
     const [inv] = await db.select().from(invoices).where(eq(invoices.id, req.params.id));
     if (!inv) throw new HttpError(404, 'not_found', 'Invoice not found');
     if (inv.status !== 'finalized') return res.status(409).json(fail('not_finalized', 'Only finalized invoices can be voided'));
+    // Block voiding a child invoice while it's still part of an active
+    // (non-void) summary — the summary's snapshot dollars include this
+    // invoice's totals, so silently voiding the child would leave a stale
+    // member in the summary. Operator must void the summary first.
+    const memberOf = await rawsql<{ billed_reference: string }[]>`
+      SELECT s.billed_reference FROM invoice_summary_members m
+      JOIN invoice_summaries s ON s.id = m.summary_id
+      WHERE m.invoice_id = ${inv.id} AND m.active = true AND s.status != 'void'
+      LIMIT 1`;
+    if (memberOf.length > 0) {
+      return res.status(409).json(fail('in_active_summary', `Cannot void: this invoice is part of summary ${memberOf[0].billed_reference}. Void the summary first.`));
+    }
     await rawsql.begin(async (tx: any) => {
       await tx`UPDATE invoices SET status='void', voided_at=now(), void_reason=${reason}, voided_by_user_id=${req.user?.id ?? null} WHERE id=${inv.id}`;
       await tx`UPDATE time_entries SET invoice_id=NULL WHERE invoice_id=${inv.id}`;

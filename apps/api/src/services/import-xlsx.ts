@@ -39,7 +39,16 @@ function cellValue(v: ExcelJS.CellValue): Cell {
   if (typeof v === 'object') {
     if ('text' in v && typeof (v as any).text === 'string') return (v as any).text;
     if ('richText' in v && Array.isArray((v as any).richText)) return (v as any).richText.map((t: any) => t.text).join('');
-    if ('result' in v) return cellValue((v as any).result);
+    // Formula cell: prefer the cached `result`. Workbooks written by tools
+    // that don't cache results (some Mac/web exporters) leave `result`
+    // undefined — returning `String(v)` then yields "[object Object]" which
+    // silently corrupts dates/numbers. Treat absent result as null so the
+    // row's validator flags it instead of inventing data.
+    if ('result' in v) {
+      const r = (v as any).result;
+      if (r === undefined) return null;
+      return cellValue(r);
+    }
   }
   return String(v);
 }
@@ -186,7 +195,10 @@ async function previewExpenses(buffer: Buffer): Promise<PreviewResult<ExpenseRow
       vendor,
       reference,
       category: category ?? ('materials' as ExpenseCategory),
-      amount: amount != null ? Math.abs(amount) : 0,
+      // Preserve sign so refunds/credits (negative) survive the round-trip.
+      // Operators see the value in the preview and can fix wrong-signed
+      // rows there before commit.
+      amount: amount ?? 0,
       description,
       job_code,
       _errors: rowErrors.length ? rowErrors : undefined,
@@ -199,19 +211,25 @@ async function previewExpenses(buffer: Buffer): Promise<PreviewResult<ExpenseRow
 async function commitExpenses(rows: Array<ExpenseRow & { _row: number }>, userId: string | null): Promise<CommitResult> {
   const jobs = await sql<{ id: string; code: string }[]>`SELECT id, code FROM jobs`;
   const jobByCode = new Map(jobs.map((j) => [j.code.toLowerCase(), j.id]));
-  let inserted = 0;
-  let skipped = 0;
-  for (const r of rows) {
-    const jobId = jobByCode.get(r.job_code.toLowerCase());
-    if (!jobId || !r.work_date || !r.vendor || !r.amount) { skipped++; continue; }
-    await sql`INSERT INTO expenses (work_date, job_id, vendor, reference, amount, category, description)
-      VALUES (${r.work_date}::date, ${jobId}, ${r.vendor}, ${r.reference}, ${r.amount}, ${r.category}, ${r.description})`;
-    inserted++;
+  // Wrap the whole batch in a transaction so a failure mid-stream rolls
+  // back the partial insert — the operator re-runs after fixing the bad
+  // row instead of being left with N-of-M committed.
+  const counts = await sql.begin(async (tx: any) => {
+    let inserted = 0;
+    let skipped = 0;
+    for (const r of rows) {
+      const jobId = jobByCode.get(r.job_code.toLowerCase());
+      if (!jobId || !r.work_date || !r.vendor || !r.amount) { skipped++; continue; }
+      await tx`INSERT INTO expenses (work_date, job_id, vendor, reference, amount, category, description)
+        VALUES (${r.work_date}::date, ${jobId}, ${r.vendor}, ${r.reference}, ${r.amount}, ${r.category}, ${r.description})`;
+      inserted++;
+    }
+    return { inserted, skipped };
+  });
+  if (counts.inserted > 0) {
+    await writeAudit({ userId, entityType: 'expense', entityId: 'bulk', action: 'import', summary: `Imported ${counts.inserted} expense(s) from xlsx; ${counts.skipped} skipped` });
   }
-  if (inserted > 0) {
-    await writeAudit({ userId, entityType: 'expense', entityId: 'bulk', action: 'import', summary: `Imported ${inserted} expense(s) from xlsx; ${skipped} skipped` });
-  }
-  return { inserted, updated: 0, skipped };
+  return { inserted: counts.inserted, updated: 0, skipped: counts.skipped };
 }
 
 // ─── Importer: Customers ───────────────────────────────────────────────────
@@ -256,48 +274,51 @@ async function previewCustomers(buffer: Buffer): Promise<PreviewResult<CustomerR
 }
 
 async function commitCustomers(rows: Array<CustomerRow & { _row: number }>, userId: string | null): Promise<CommitResult> {
-  let inserted = 0; let updated = 0; let skipped = 0;
   // Coerce every text field to a string up front so the UPDATE's parameter
   // binding never sees `undefined` (postgres.js rejects undefined).
   const s = (v: unknown): string => v == null ? '' : String(v);
-  for (const raw of rows) {
-    const r = {
-      name: s(raw.name),
-      bill_to_address1: s(raw.bill_to_address1),
-      bill_to_address2: s(raw.bill_to_address2),
-      bill_to_city: s(raw.bill_to_city),
-      bill_to_state: s(raw.bill_to_state),
-      bill_to_zip: s(raw.bill_to_zip),
-      contact_name: s(raw.contact_name),
-      contact_email: s(raw.contact_email),
-      contact_phone: s(raw.contact_phone),
-    };
-    if (!r.name) { skipped++; continue; }
-    // Case-insensitive name match; insert if new, otherwise overlay only the
-    // non-empty fields supplied (don't blank existing values).
-    const [existing] = await sql<{ id: string }[]>`SELECT id FROM customers WHERE lower(name) = lower(${r.name}) LIMIT 1`;
-    if (existing) {
-      await sql`UPDATE customers SET
-        bill_to_address1 = CASE WHEN ${r.bill_to_address1} = '' THEN bill_to_address1 ELSE ${r.bill_to_address1} END,
-        bill_to_address2 = CASE WHEN ${r.bill_to_address2} = '' THEN bill_to_address2 ELSE ${r.bill_to_address2} END,
-        bill_to_city = CASE WHEN ${r.bill_to_city} = '' THEN bill_to_city ELSE ${r.bill_to_city} END,
-        bill_to_state = CASE WHEN ${r.bill_to_state} = '' THEN bill_to_state ELSE ${r.bill_to_state} END,
-        bill_to_zip = CASE WHEN ${r.bill_to_zip} = '' THEN bill_to_zip ELSE ${r.bill_to_zip} END,
-        contact_name = CASE WHEN ${r.contact_name} = '' THEN contact_name ELSE ${r.contact_name} END,
-        contact_email = CASE WHEN ${r.contact_email} = '' THEN contact_email ELSE ${r.contact_email} END,
-        contact_phone = CASE WHEN ${r.contact_phone} = '' THEN contact_phone ELSE ${r.contact_phone} END
-        WHERE id = ${existing.id}`;
-      updated++;
-    } else {
-      await sql`INSERT INTO customers (name, bill_to_address1, bill_to_address2, bill_to_city, bill_to_state, bill_to_zip, contact_name, contact_email, contact_phone)
-        VALUES (${r.name}, ${r.bill_to_address1}, ${r.bill_to_address2}, ${r.bill_to_city}, ${r.bill_to_state}, ${r.bill_to_zip}, ${r.contact_name}, ${r.contact_email}, ${r.contact_phone})`;
-      inserted++;
+  const counts = await sql.begin(async (tx: any) => {
+    let inserted = 0; let updated = 0; let skipped = 0;
+    for (const raw of rows) {
+      const r = {
+        name: s(raw.name),
+        bill_to_address1: s(raw.bill_to_address1),
+        bill_to_address2: s(raw.bill_to_address2),
+        bill_to_city: s(raw.bill_to_city),
+        bill_to_state: s(raw.bill_to_state),
+        bill_to_zip: s(raw.bill_to_zip),
+        contact_name: s(raw.contact_name),
+        contact_email: s(raw.contact_email),
+        contact_phone: s(raw.contact_phone),
+      };
+      if (!r.name) { skipped++; continue; }
+      // Case-insensitive name match; insert if new, otherwise overlay only the
+      // non-empty fields supplied (don't blank existing values).
+      const [existing] = await tx`SELECT id FROM customers WHERE lower(name) = lower(${r.name}) LIMIT 1` as { id: string }[];
+      if (existing) {
+        await tx`UPDATE customers SET
+          bill_to_address1 = CASE WHEN ${r.bill_to_address1} = '' THEN bill_to_address1 ELSE ${r.bill_to_address1} END,
+          bill_to_address2 = CASE WHEN ${r.bill_to_address2} = '' THEN bill_to_address2 ELSE ${r.bill_to_address2} END,
+          bill_to_city = CASE WHEN ${r.bill_to_city} = '' THEN bill_to_city ELSE ${r.bill_to_city} END,
+          bill_to_state = CASE WHEN ${r.bill_to_state} = '' THEN bill_to_state ELSE ${r.bill_to_state} END,
+          bill_to_zip = CASE WHEN ${r.bill_to_zip} = '' THEN bill_to_zip ELSE ${r.bill_to_zip} END,
+          contact_name = CASE WHEN ${r.contact_name} = '' THEN contact_name ELSE ${r.contact_name} END,
+          contact_email = CASE WHEN ${r.contact_email} = '' THEN contact_email ELSE ${r.contact_email} END,
+          contact_phone = CASE WHEN ${r.contact_phone} = '' THEN contact_phone ELSE ${r.contact_phone} END
+          WHERE id = ${existing.id}`;
+        updated++;
+      } else {
+        await tx`INSERT INTO customers (name, bill_to_address1, bill_to_address2, bill_to_city, bill_to_state, bill_to_zip, contact_name, contact_email, contact_phone)
+          VALUES (${r.name}, ${r.bill_to_address1}, ${r.bill_to_address2}, ${r.bill_to_city}, ${r.bill_to_state}, ${r.bill_to_zip}, ${r.contact_name}, ${r.contact_email}, ${r.contact_phone})`;
+        inserted++;
+      }
     }
+    return { inserted, updated, skipped };
+  });
+  if (counts.inserted + counts.updated > 0) {
+    await writeAudit({ userId, entityType: 'customer', entityId: 'bulk', action: 'import', summary: `Imported customers from xlsx: ${counts.inserted} new, ${counts.updated} updated, ${counts.skipped} skipped` });
   }
-  if (inserted + updated > 0) {
-    await writeAudit({ userId, entityType: 'customer', entityId: 'bulk', action: 'import', summary: `Imported customers from xlsx: ${inserted} new, ${updated} updated, ${skipped} skipped` });
-  }
-  return { inserted, updated, skipped };
+  return counts;
 }
 
 // ─── Importer: Time entries ────────────────────────────────────────────────
@@ -458,31 +479,34 @@ async function commitTimeEntries(rows: Array<TimeEntryRow & { _row: number }>, u
   const jobs = await sql<{ id: string; code: string }[]>`SELECT id, code FROM jobs`;
   const jobByCode = new Map(jobs.map((j) => [j.code.toLowerCase(), j.id]));
 
-  let inserted = 0, updated = 0, skipped = 0;
-  for (const r of rows) {
-    const empId = empByName.get(r.employee.toLowerCase());
-    const jobId = jobByCode.get(r.job_code.toLowerCase());
-    if (!empId || !jobId || !r.work_date) { skipped++; continue; }
-    if (r.st_hours === 0 && r.ot_hours === 0 && r.dt_hours === 0) { skipped++; continue; }
-    // Upsert by (employee, job, date). Importing a row for a (e,j,d) that's
-    // already bound to an invoice would corrupt the snapshot — refuse to
-    // overwrite billed rows.
-    const [existing] = await sql<{ id: string; invoice_id: string | null }[]>`
-      SELECT id, invoice_id FROM time_entries WHERE employee_id = ${empId} AND job_id = ${jobId} AND work_date = ${r.work_date}::date`;
-    if (existing) {
-      if (existing.invoice_id) { skipped++; continue; }
-      await sql`UPDATE time_entries SET st_hours = ${r.st_hours}, ot_hours = ${r.ot_hours}, dt_hours = ${r.dt_hours} WHERE id = ${existing.id}`;
-      updated++;
-    } else {
-      await sql`INSERT INTO time_entries (employee_id, job_id, work_date, st_hours, ot_hours, dt_hours)
-        VALUES (${empId}, ${jobId}, ${r.work_date}::date, ${r.st_hours}, ${r.ot_hours}, ${r.dt_hours})`;
-      inserted++;
+  const counts = await sql.begin(async (tx: any) => {
+    let inserted = 0, updated = 0, skipped = 0;
+    for (const r of rows) {
+      const empId = empByName.get(r.employee.toLowerCase());
+      const jobId = jobByCode.get(r.job_code.toLowerCase());
+      if (!empId || !jobId || !r.work_date) { skipped++; continue; }
+      if (r.st_hours === 0 && r.ot_hours === 0 && r.dt_hours === 0) { skipped++; continue; }
+      // Upsert by (employee, job, date). Importing a row for a (e,j,d) that's
+      // already bound to an invoice would corrupt the snapshot — refuse to
+      // overwrite billed rows.
+      const [existing] = await tx`
+        SELECT id, invoice_id FROM time_entries WHERE employee_id = ${empId} AND job_id = ${jobId} AND work_date = ${r.work_date}::date` as { id: string; invoice_id: string | null }[];
+      if (existing) {
+        if (existing.invoice_id) { skipped++; continue; }
+        await tx`UPDATE time_entries SET st_hours = ${r.st_hours}, ot_hours = ${r.ot_hours}, dt_hours = ${r.dt_hours} WHERE id = ${existing.id}`;
+        updated++;
+      } else {
+        await tx`INSERT INTO time_entries (employee_id, job_id, work_date, st_hours, ot_hours, dt_hours)
+          VALUES (${empId}, ${jobId}, ${r.work_date}::date, ${r.st_hours}, ${r.ot_hours}, ${r.dt_hours})`;
+        inserted++;
+      }
     }
+    return { inserted, updated, skipped };
+  });
+  if (counts.inserted + counts.updated > 0) {
+    await writeAudit({ userId, entityType: 'time_entry', entityId: 'bulk', action: 'import', summary: `Imported time entries from xlsx: ${counts.inserted} new, ${counts.updated} updated, ${counts.skipped} skipped` });
   }
-  if (inserted + updated > 0) {
-    await writeAudit({ userId, entityType: 'time_entry', entityId: 'bulk', action: 'import', summary: `Imported time entries from xlsx: ${inserted} new, ${updated} updated, ${skipped} skipped` });
-  }
-  return { inserted, updated, skipped };
+  return counts;
 }
 
 // ─── Importer: Jobs ────────────────────────────────────────────────────────
@@ -573,51 +597,63 @@ async function commitJobs(rows: Array<JobRow & { _row: number }>, userId: string
   const customers = await sql<{ id: string; name: string }[]>`SELECT id, name FROM customers`;
   const custByName = new Map(customers.map((c) => [c.name.toLowerCase(), c.id]));
 
-  let inserted = 0, updated = 0, skipped = 0;
   const s = (v: unknown): string => v == null ? '' : String(v);
-  for (const raw of rows) {
-    const customerId = custByName.get(raw.customer.toLowerCase());
-    if (!raw.code || !customerId || !raw.description) { skipped++; continue; }
-    const r = {
-      code: s(raw.code),
-      description: s(raw.description),
-      po_number: raw.po_number,
-      billing_type: raw.billing_type,
-      site_address1: s(raw.site_address1),
-      site_address2: s(raw.site_address2),
-      site_city: s(raw.site_city),
-      site_state: s(raw.site_state),
-      site_zip: s(raw.site_zip),
-      active: raw.active,
-      notes: raw.notes,
-    };
-    // citext makes code uniqueness case-insensitive at the column level.
-    const [existing] = await sql<{ id: string }[]>`SELECT id FROM jobs WHERE code = ${r.code}::citext LIMIT 1`;
-    if (existing) {
-      await sql`UPDATE jobs SET
-        customer_id = ${customerId},
-        description = ${r.description},
-        po_number = ${r.po_number},
-        billing_type = ${r.billing_type}::billing_type,
-        site_address1 = CASE WHEN ${r.site_address1} = '' THEN site_address1 ELSE ${r.site_address1} END,
-        site_address2 = CASE WHEN ${r.site_address2} = '' THEN site_address2 ELSE ${r.site_address2} END,
-        site_city = CASE WHEN ${r.site_city} = '' THEN site_city ELSE ${r.site_city} END,
-        site_state = CASE WHEN ${r.site_state} = '' THEN site_state ELSE ${r.site_state} END,
-        site_zip = CASE WHEN ${r.site_zip} = '' THEN site_zip ELSE ${r.site_zip} END,
-        active = ${r.active},
-        notes = CASE WHEN ${r.notes ?? ''} = '' THEN notes ELSE ${r.notes} END
-        WHERE id = ${existing.id}`;
-      updated++;
-    } else {
-      await sql`INSERT INTO jobs (code, customer_id, description, po_number, billing_type, site_address1, site_address2, site_city, site_state, site_zip, active, notes)
-        VALUES (${r.code}, ${customerId}, ${r.description}, ${r.po_number}, ${r.billing_type}::billing_type, ${r.site_address1}, ${r.site_address2}, ${r.site_city}, ${r.site_state}, ${r.site_zip}, ${r.active}, ${r.notes})`;
-      inserted++;
+
+  // Dedupe by code (last occurrence wins) so a sheet that lists the same code
+  // twice doesn't run two conflicting UPDATEs against the same row.
+  const byCode = new Map<string, typeof rows[number]>();
+  for (const r of rows) {
+    if (r.code) byCode.set(r.code.toLowerCase(), r);
+  }
+  const deduped = Array.from(byCode.values());
+
+  const counts = await sql.begin(async (tx: any) => {
+    let inserted = 0, updated = 0, skipped = 0;
+    for (const raw of deduped) {
+      const customerId = custByName.get(raw.customer.toLowerCase());
+      if (!raw.code || !customerId || !raw.description) { skipped++; continue; }
+      const r = {
+        code: s(raw.code),
+        description: s(raw.description),
+        po_number: raw.po_number,
+        billing_type: raw.billing_type,
+        site_address1: s(raw.site_address1),
+        site_address2: s(raw.site_address2),
+        site_city: s(raw.site_city),
+        site_state: s(raw.site_state),
+        site_zip: s(raw.site_zip),
+        active: raw.active,
+        notes: raw.notes,
+      };
+      // citext makes code uniqueness case-insensitive at the column level.
+      const [existing] = await tx`SELECT id FROM jobs WHERE code = ${r.code}::citext LIMIT 1` as { id: string }[];
+      if (existing) {
+        await tx`UPDATE jobs SET
+          customer_id = ${customerId},
+          description = ${r.description},
+          po_number = ${r.po_number},
+          billing_type = ${r.billing_type}::billing_type,
+          site_address1 = CASE WHEN ${r.site_address1} = '' THEN site_address1 ELSE ${r.site_address1} END,
+          site_address2 = CASE WHEN ${r.site_address2} = '' THEN site_address2 ELSE ${r.site_address2} END,
+          site_city = CASE WHEN ${r.site_city} = '' THEN site_city ELSE ${r.site_city} END,
+          site_state = CASE WHEN ${r.site_state} = '' THEN site_state ELSE ${r.site_state} END,
+          site_zip = CASE WHEN ${r.site_zip} = '' THEN site_zip ELSE ${r.site_zip} END,
+          active = ${r.active},
+          notes = CASE WHEN ${r.notes ?? ''} = '' THEN notes ELSE ${r.notes} END
+          WHERE id = ${existing.id}`;
+        updated++;
+      } else {
+        await tx`INSERT INTO jobs (code, customer_id, description, po_number, billing_type, site_address1, site_address2, site_city, site_state, site_zip, active, notes)
+          VALUES (${r.code}, ${customerId}, ${r.description}, ${r.po_number}, ${r.billing_type}::billing_type, ${r.site_address1}, ${r.site_address2}, ${r.site_city}, ${r.site_state}, ${r.site_zip}, ${r.active}, ${r.notes})`;
+        inserted++;
+      }
     }
+    return { inserted, updated, skipped };
+  });
+  if (counts.inserted + counts.updated > 0) {
+    await writeAudit({ userId, entityType: 'job', entityId: 'bulk', action: 'import', summary: `Imported jobs from xlsx: ${counts.inserted} new, ${counts.updated} updated, ${counts.skipped} skipped` });
   }
-  if (inserted + updated > 0) {
-    await writeAudit({ userId, entityType: 'job', entityId: 'bulk', action: 'import', summary: `Imported jobs from xlsx: ${inserted} new, ${updated} updated, ${skipped} skipped` });
-  }
-  return { inserted, updated, skipped };
+  return counts;
 }
 
 // ─── Dispatch ──────────────────────────────────────────────────────────────

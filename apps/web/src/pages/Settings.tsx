@@ -118,7 +118,7 @@ function SmtpSection({ data, onSaved }: { data: any; onSaved: () => void }) {
 function Markups({ data, onSaved }: { data: any; onSaved: () => void }) {
   const init = Object.fromEntries(EXPENSE_CATEGORIES.map((c) => [c, String((data.markups.find((m: any) => m.category === c)?.percent ?? 0) * 100)]));
   const [map, setMap] = useState<Record<string, string>>(init);
-  const m = useMutation({ mutationFn: () => api.put('/settings/markups', EXPENSE_CATEGORIES.map((c) => ({ category: c, percent: Number(map[c]) / 100 }))), onSuccess: () => { toast('Saved'); onSaved(); } });
+  const m = useMutation({ mutationFn: () => api.put('/settings/markups', EXPENSE_CATEGORIES.map((c) => ({ category: c, percent: Number(map[c]) / 100 }))), onSuccess: () => { toast('Saved'); onSaved(); }, onError: (e: any) => toast(e.message ?? String(e), 'err') });
   return (
     <div className="card max-w-md space-y-2 p-5">
       {EXPENSE_CATEGORIES.map((c) => (

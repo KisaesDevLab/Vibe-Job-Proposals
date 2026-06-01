@@ -186,28 +186,34 @@ employeesRouter.post(
   ah(async (req: AuthedRequest, res) => {
     const body = costRateSchema.parse(req.body);
     const empId = req.params.id;
-    const result = await db.transaction(async (tx) => {
-      // close prior open rate
-      const dayBefore = new Date(body.effective_from);
-      dayBefore.setUTCDate(dayBefore.getUTCDate());
-      await tx
-        .update(employeeCostRates)
-        .set({ effectiveTo: body.effective_from })
-        .where(and(eq(employeeCostRates.employeeId, empId), isNull(employeeCostRates.effectiveTo)));
-      const [row] = await tx
-        .insert(employeeCostRates)
-        .values({
-          employeeId: empId,
-          effectiveFrom: body.effective_from,
-          costSt: String(body.cost_st),
-          costOt: String(body.cost_ot),
-          costDt: String(body.cost_dt),
-        })
-        .returning();
-      return row;
-    });
-    await writeAudit({ userId: req.user?.id, entityType: 'employee', entityId: empId, action: 'update', summary: `Added cost rate effective ${body.effective_from}` });
-    res.status(201).json(ok(result));
+    try {
+      const result = await db.transaction(async (tx) => {
+        // close prior open rate
+        await tx
+          .update(employeeCostRates)
+          .set({ effectiveTo: body.effective_from })
+          .where(and(eq(employeeCostRates.employeeId, empId), isNull(employeeCostRates.effectiveTo)));
+        const [row] = await tx
+          .insert(employeeCostRates)
+          .values({
+            employeeId: empId,
+            effectiveFrom: body.effective_from,
+            costSt: String(body.cost_st),
+            costOt: String(body.cost_ot),
+            costDt: String(body.cost_dt),
+          })
+          .returning();
+        return row;
+      });
+      await writeAudit({ userId: req.user?.id, entityType: 'employee', entityId: empId, action: 'update', summary: `Added cost rate effective ${body.effective_from}` });
+      res.status(201).json(ok(result));
+    } catch (err: any) {
+      const code = err?.code ?? err?.cause?.code;
+      if (code === '23P01') {
+        return res.status(409).json(fail('overlap', 'A cost rate row already covers this date range. Edit or close the existing row first.'));
+      }
+      throw err;
+    }
   }),
 );
 

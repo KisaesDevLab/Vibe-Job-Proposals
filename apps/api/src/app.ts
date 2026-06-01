@@ -8,7 +8,7 @@ import { fail } from '@darrow/shared';
 import { config, isProd } from './config.js';
 import { redis } from './redis.js';
 import { errorHandler } from './error-handler.js';
-import { requireAuth } from './middleware/auth.js';
+import { requireAuth, requireRole } from './middleware/auth.js';
 import { healthRouter } from './routes/health.js';
 import { authRouter } from './routes/auth.js';
 import { publicRouter } from './routes/public.js';
@@ -102,7 +102,7 @@ export function createApp(): express.Express {
   app.use('/api/inbox', inboxRouter);
   app.use('/api/invoices', invoicesRouter);
   app.use('/api/invoice-summaries', invoiceSummariesRouter);
-  app.use('/api/import', importRouter);
+  app.use('/api/import', requireRole('admin', 'owner'), importRouter);
   app.use('/api/reports', reportsRouter);
 
   app.use('/api', (_req, res) => res.status(404).json(fail('not_found', 'Route not found')));

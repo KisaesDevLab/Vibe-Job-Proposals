@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Plus, Download, FileText, AlertTriangle } from 'lucide-react';
@@ -280,7 +280,21 @@ function NewDraft({ onClose, onCreated }: { onClose: () => void; onCreated: (id:
   const { data: jobs } = useQuery({ queryKey: ['jobs'], queryFn: () => api.get<{ jobs: any[] }>('/jobs?active=true&pageSize=200') });
   const [job_id, setJob] = useState('');
   const [through_date, setThrough] = useState(new Date().toISOString().slice(0, 10));
-  const m = useMutation({ mutationFn: () => api.post<{ id: string }>('/invoices/draft', { job_id, through_date }), onSuccess: (r) => onCreated(r.id), onError: (e: any) => toast(e.message, 'err') });
+  const m = useMutation({
+    mutationFn: () => api.post<{ id: string }>('/invoices/draft', { job_id, through_date }),
+    onSuccess: (r) => onCreated(r.id),
+    onError: (e: any) => {
+      // The API returns a structured 409 when a draft already exists for the
+      // job — surface a clear message + jump directly to the existing draft
+      // rather than the cryptic generic error.
+      if (e.code === 'draft_exists' && e.details?.invoice_id) {
+        toast('A draft already exists for this job — opening it', 'ok');
+        onCreated(e.details.invoice_id);
+        return;
+      }
+      toast(e.message ?? String(e), 'err');
+    },
+  });
   return (
     <Modal open onClose={onClose} title="New Invoice Draft">
       <div className="space-y-3">
@@ -409,9 +423,14 @@ function NewSummaryModal({ onClose, onCreated }: { onClose: () => void; onCreate
     enabled: !!customerId && selected.size > 0,
   });
   // Seed defaults from the suggestion (only if the operator hasn't typed yet).
-  if (suggest && !billedRef) setBilledRef(suggest.billed_reference);
-  if (suggest && !start && suggest.work_start_date) setStart(suggest.work_start_date);
-  if (suggest && !end && suggest.work_end_date) setEnd(suggest.work_end_date);
+  // Running this in render trips React's "Cannot update during render"
+  // warning; use an effect keyed on the suggestion identity.
+  useEffect(() => {
+    if (suggest && !billedRef) setBilledRef(suggest.billed_reference);
+    if (suggest && !start && suggest.work_start_date) setStart(suggest.work_start_date);
+    if (suggest && !end && suggest.work_end_date) setEnd(suggest.work_end_date);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggest]);
 
   const create = useMutation({
     mutationFn: () => api.post<{ id: string }>('/invoice-summaries', {

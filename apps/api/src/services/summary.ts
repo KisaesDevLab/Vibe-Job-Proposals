@@ -130,6 +130,9 @@ export async function createDraft(input: CreateDraftInput): Promise<{ id: string
   // Validate all members are finalized invoices of this customer + not bound
   // to another active summary.
   const ids = [...new Set(input.member_invoice_ids)];
+  if (ids.length === 0) {
+    throw Object.assign(new Error('Summary needs at least one member invoice'), { status: 400, code: 'empty' });
+  }
   const members = await sql<any[]>`
     SELECT i.id, i.status, j.customer_id FROM invoices i JOIN jobs j ON j.id = i.job_id
     WHERE i.id IN ${sql(ids)}`;
@@ -215,13 +218,19 @@ export interface UpdateInput {
 }
 
 export async function updateDraft(id: string, input: UpdateInput): Promise<void> {
+  // Empty-string dates from the UI mean "clear" — coerce them to null so the
+  // `::date` cast doesn't crash on `""::date`. Same for other optional text
+  // fields where `''` should be treated as "no value" rather than the
+  // literal empty string.
+  const start = input.work_start_date === '' ? null : input.work_start_date;
+  const end = input.work_end_date === '' ? null : input.work_end_date;
   await sql`UPDATE invoice_summaries SET
     billed_reference = COALESCE(${input.billed_reference ?? null}, billed_reference),
     description = COALESCE(${input.description ?? null}, description),
     po_number = ${input.po_number === undefined ? sql`po_number` : input.po_number},
     location_of_service = ${input.location_of_service === undefined ? sql`location_of_service` : input.location_of_service},
-    work_start_date = ${input.work_start_date === undefined ? sql`work_start_date` : input.work_start_date}::date,
-    work_end_date = ${input.work_end_date === undefined ? sql`work_end_date` : input.work_end_date}::date
+    work_start_date = ${start === undefined ? sql`work_start_date` : start}::date,
+    work_end_date = ${end === undefined ? sql`work_end_date` : end}::date
     WHERE id = ${id} AND status = 'draft'`;
 }
 
@@ -230,6 +239,7 @@ export async function addMembers(summaryId: string, invoiceIds: string[], userId
   if (!s) throw Object.assign(new Error('Summary not found'), { status: 404, code: 'not_found' });
   if (s.status !== 'draft') throw Object.assign(new Error('Summary is not a draft'), { status: 409, code: 'not_draft' });
   const ids = [...new Set(invoiceIds)];
+  if (ids.length === 0) return; // nothing to do; avoid the empty IN crash
   const valid = await sql<any[]>`
     SELECT i.id FROM invoices i JOIN jobs j ON j.id = i.job_id
     WHERE i.id IN ${sql(ids)} AND i.status = 'finalized' AND j.customer_id = ${s.customer_id}`;
@@ -256,6 +266,7 @@ export async function removeMembers(summaryId: string, invoiceIds: string[], use
   const [s] = await sql<any[]>`SELECT status FROM invoice_summaries WHERE id = ${summaryId}`;
   if (!s) throw Object.assign(new Error('Summary not found'), { status: 404, code: 'not_found' });
   if (s.status !== 'draft') throw Object.assign(new Error('Summary is not a draft'), { status: 409, code: 'not_draft' });
+  if (invoiceIds.length === 0) return; // avoid empty IN clause crash
   await sql`DELETE FROM invoice_summary_members WHERE summary_id = ${summaryId} AND invoice_id IN ${sql(invoiceIds)}`;
   await writeAudit({ userId: userId ?? null, entityType: 'invoice_summary', entityId: summaryId, action: 'update', summary: `Removed ${invoiceIds.length} member(s)` });
 }

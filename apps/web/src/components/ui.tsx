@@ -3,9 +3,17 @@ import { X } from 'lucide-react';
 
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
+    if (!open) return;
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    if (open) window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
+    window.addEventListener('keydown', h);
+    // Lock body scroll while a modal is open — prevents the page behind from
+    // scrolling under your cursor when you wheel inside the modal.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', h);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [open, onClose]);
   if (!open) return null;
   return (

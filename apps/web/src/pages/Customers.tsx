@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -97,14 +97,20 @@ function CustomerDrawer({ customer, onClose, onChanged }: { customer: Customer; 
 function ProfileTab({ customer, onChanged }: { customer: Customer; onChanged: () => void }) {
   const { data, isLoading } = useQuery({ queryKey: ['customer', customer.id], queryFn: () => api.get<any>(`/customers/${customer.id}`) });
   const [f, setF] = useState<any>(null);
-  if (data && !f) {
-    setF({
-      name: data.name ?? '', bill_to_address1: data.billToAddress1 ?? '', bill_to_address2: data.billToAddress2 ?? '',
-      bill_to_city: data.billToCity ?? '', bill_to_state: data.billToState ?? '', bill_to_zip: data.billToZip ?? '',
-      contact_name: data.contactName ?? '', contact_email: data.contactEmail ?? '', contact_phone: data.contactPhone ?? '',
-      active: data.active ?? true,
-    });
-  }
+  // Seed the form once when the customer detail arrives. Doing this in render
+  // (the old `if (data && !f) setF(...)` pattern) trips React 18's "Cannot
+  // update during render" warning and can cause infinite re-renders in strict
+  // mode.
+  useEffect(() => {
+    if (data && !f) {
+      setF({
+        name: data.name ?? '', bill_to_address1: data.billToAddress1 ?? '', bill_to_address2: data.billToAddress2 ?? '',
+        bill_to_city: data.billToCity ?? '', bill_to_state: data.billToState ?? '', bill_to_zip: data.billToZip ?? '',
+        contact_name: data.contactName ?? '', contact_email: data.contactEmail ?? '', contact_phone: data.contactPhone ?? '',
+        active: data.active ?? true,
+      });
+    }
+  }, [data, f]);
   const qc = useQueryClient();
   const m = useMutation({
     mutationFn: () => api.put(`/customers/${customer.id}`, f),
@@ -139,6 +145,7 @@ function MarkupsTab({ customer, onChanged }: { customer: Customer; onChanged: ()
   const m = useMutation({
     mutationFn: () => api.put(`/customers/${customer.id}/markups`, EXPENSE_CATEGORIES.filter((c) => map[c] !== '').map((c) => ({ category: c, percent: Number(map[c]) / 100 }))),
     onSuccess: () => { toast('Markups saved'); onChanged(); },
+    onError: (e: any) => toast(e.message ?? String(e), 'err'),
   });
   return (
     <div className="space-y-2">
@@ -169,7 +176,12 @@ function OverheadTab({ customer, onChanged }: { customer: Customer; onChanged: (
   };
   const [f, setF] = useState(initial);
   const [seeded, setSeeded] = useState(false);
-  if (detail && !seeded) { setF(initial); setSeeded(true); }
+  useEffect(() => {
+    if (detail && !seeded) { setF(initial); setSeeded(true); }
+    // initial is recomputed each render but its dependencies (detail/customer)
+    // are what matter — eslint-disable for stable behavior.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail, seeded]);
   const save = useMutation({
     mutationFn: () => api.put(`/customers/${customer.id}/overhead`, {
       employee_id: f.employee_id || null,
@@ -349,10 +361,28 @@ function ScheduleEditor({ scheduleId, customerId, onBack }: { scheduleId: string
     }));
   };
   const [loaded, setLoaded] = useState(false);
-  if (levels && sched && !loaded) { setRows(init()); setLoaded(true); }
+  useEffect(() => {
+    if (levels && sched && !loaded) { setRows(init()); setLoaded(true); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [levels, sched, loaded]);
+  const qc = useQueryClient();
   const save = useMutation({
-    mutationFn: () => api.post(`/rate-schedules/${scheduleId}/lines/bulk`, Object.entries(rows).filter(([, v]) => v.rate_1x !== '').map(([level_id, v]) => ({ level_id, rate_1x: Number(v.rate_1x), rate_15x: Number(v.rate_15x || v.rate_1x), rate_2x: Number(v.rate_2x || v.rate_1x) }))),
-    onSuccess: async () => { await api.put(`/rate-schedules/${scheduleId}/set-default`); toast('Rates saved & set as default'); },
+    // Chain set-default inside mutationFn so the chained PUT's failure
+    // actually surfaces (vs. running it post-onSuccess where errors are
+    // swallowed). Both calls succeed or the whole save reports the error.
+    mutationFn: async () => {
+      await api.post(`/rate-schedules/${scheduleId}/lines/bulk`,
+        Object.entries(rows)
+          .filter(([, v]) => v.rate_1x !== '')
+          .map(([level_id, v]) => ({ level_id, rate_1x: Number(v.rate_1x), rate_15x: Number(v.rate_15x || v.rate_1x), rate_2x: Number(v.rate_2x || v.rate_1x) })));
+      await api.put(`/rate-schedules/${scheduleId}/set-default`);
+    },
+    onSuccess: () => {
+      toast('Rates saved & set as default');
+      qc.invalidateQueries({ queryKey: ['schedule', scheduleId] });
+      qc.invalidateQueries({ queryKey: ['schedules', customerId] });
+      qc.invalidateQueries({ queryKey: ['all-schedules'] });
+    },
     onError: (e: any) => toast(e.message, 'err'),
   });
   void customerId; void formatMoney;

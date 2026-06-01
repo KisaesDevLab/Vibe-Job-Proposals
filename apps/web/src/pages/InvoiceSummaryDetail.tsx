@@ -53,6 +53,7 @@ export function InvoiceSummaryDetailPage({ id }: { id: string }) {
   const regen = useMutation({
     mutationFn: () => api.post(`/invoice-summaries/${id}/regenerate`),
     onSuccess: () => { toast('Regenerating'); qc.invalidateQueries({ queryKey: ['summary', id] }); },
+    onError: (e: any) => toast(e.message ?? String(e), 'err'),
   });
 
   if (isLoading || !data) return <Skeleton rows={8} />;

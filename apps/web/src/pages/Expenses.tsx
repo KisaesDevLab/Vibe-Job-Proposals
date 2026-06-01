@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Paperclip, Download, Inbox as InboxIcon, Trash2, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -162,18 +162,22 @@ function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onCl
   // overwrites the row with server-canonical values).
   const rowKey = data ? `${data.updatedAt ?? ''}|${data.id}` : '';
   const [seededFrom, setSeededFrom] = useState('');
-  if (data && rowKey !== seededFrom) {
-    setF({
-      work_date: data.workDate ?? data.work_date ?? '',
-      job_id: data.jobId ?? data.job_id ?? '',
-      vendor: data.vendor ?? '',
-      amount: String(data.amount ?? ''),
-      category: data.category ?? 'materials',
-      reference: data.reference ?? '',
-      description: data.description ?? '',
-    });
-    setSeededFrom(rowKey);
-  }
+  // Re-seed when the row identity/version changes. In-render setState was the
+  // old pattern; React 18 strict mode warns on it.
+  useEffect(() => {
+    if (data && rowKey !== seededFrom) {
+      setF({
+        work_date: data.workDate ?? data.work_date ?? '',
+        job_id: data.jobId ?? data.job_id ?? '',
+        vendor: data.vendor ?? '',
+        amount: String(data.amount ?? ''),
+        category: data.category ?? 'materials',
+        reference: data.reference ?? '',
+        description: data.description ?? '',
+      });
+      setSeededFrom(rowKey);
+    }
+  }, [data, rowKey, seededFrom]);
   const locked = !!(data?.invoiceId ?? data?.invoice_id);
 
   const save = useMutation({
@@ -412,7 +416,7 @@ function InboxTab() {
                 ) : (
                   <div className="grid h-[70vh] place-items-center gap-2 text-center">
                     <span className="text-red">Conversion failed</span>
-                    <button className="btn-ghost" onClick={() => api.post(`/inbox/${selected.id}/retry`).then(invalidate)}>Retry</button>
+                    <button className="btn-ghost" onClick={() => api.post(`/inbox/${selected.id}/retry`).then(invalidate).catch((e: any) => toast(e.message ?? String(e), 'err'))}>Retry</button>
                   </div>
                 )}
               </div>
@@ -430,12 +434,15 @@ function InboxEntryForm({ doc, onProcessed, onDeleted }: { doc: InboxDoc; onProc
   const [f, setF] = useState({ work_date: new Date().toISOString().slice(0, 10), job_id: '', vendor: guessVendor, amount: '', category: 'materials', reference: '', description: doc.notes ?? '' });
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
   // Pre-select the job if the employee's submitted code matches an active job.
+  // Done in an effect so we don't setState during render (React 18 warns).
   const [matched, setMatched] = useState(false);
-  if (jobs && doc.submitted_job_code && !f.job_id && !matched) {
-    const hit = jobs.jobs.find((j) => j.code.toLowerCase() === doc.submitted_job_code!.trim().toLowerCase());
-    setMatched(true);
-    if (hit) setF((p) => ({ ...p, job_id: hit.id }));
-  }
+  useEffect(() => {
+    if (jobs && doc.submitted_job_code && !f.job_id && !matched) {
+      const hit = jobs.jobs.find((j) => j.code.toLowerCase() === doc.submitted_job_code!.trim().toLowerCase());
+      setMatched(true);
+      if (hit) setF((p) => ({ ...p, job_id: hit.id }));
+    }
+  }, [jobs, doc.submitted_job_code, f.job_id, matched]);
   const process = useMutation({
     mutationFn: () => api.post(`/inbox/${doc.id}/process`, { ...f, amount: Number(f.amount), reference: f.reference || undefined, description: f.description || undefined }),
     onSuccess: () => { toast('Saved as expense'); onProcessed(); },

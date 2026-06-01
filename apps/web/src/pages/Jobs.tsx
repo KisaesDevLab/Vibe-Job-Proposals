@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -170,17 +170,21 @@ function JobForm({ jobId, onClose, onSaved }: { jobId?: string; onClose: () => v
   });
   const [f, setF] = useState({ code: '', customer_id: '', description: '', po_number: '', billing_type: 'tm', active: true });
   const [seeded, setSeeded] = useState(false);
-  if (isEdit && existing && !seeded) {
-    setF({
-      code: existing.code ?? '',
-      customer_id: existing.customerId ?? '',
-      description: existing.description ?? '',
-      po_number: existing.poNumber ?? '',
-      billing_type: existing.billingType ?? 'tm',
-      active: existing.active ?? true,
-    });
-    setSeeded(true);
-  }
+  // Seed once the existing record arrives. Doing this in render trips
+  // React 18's "Cannot update during render" warning.
+  useEffect(() => {
+    if (isEdit && existing && !seeded) {
+      setF({
+        code: existing.code ?? '',
+        customer_id: existing.customerId ?? '',
+        description: existing.description ?? '',
+        po_number: existing.poNumber ?? '',
+        billing_type: existing.billingType ?? 'tm',
+        active: existing.active ?? true,
+      });
+      setSeeded(true);
+    }
+  }, [isEdit, existing, seeded]);
   const m = useMutation({
     mutationFn: () => isEdit
       ? api.put(`/jobs/${jobId}`, { ...f, po_number: f.po_number || null })

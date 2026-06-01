@@ -115,6 +115,14 @@ export function SearchSelect({
     setHighlight(0);
   }, [query]);
 
+  // Clamp highlight if the filtered list shrinks (e.g., the parent removed
+  // options while we're open) so Enter doesn't try to commit an undefined.
+  useEffect(() => {
+    if (highlight > Math.max(0, filtered.length - 1)) {
+      setHighlight(Math.max(0, filtered.length - 1));
+    }
+  }, [filtered.length, highlight]);
+
   // Keep highlighted item scrolled into view.
   useEffect(() => {
     if (!open) return;

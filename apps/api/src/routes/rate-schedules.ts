@@ -129,10 +129,19 @@ rateSchedulesRouter.put(
   '/:id',
   ah(async (req: AuthedRequest, res) => {
     const body = rateScheduleSchema.partial().parse(req.body);
+    // Build the set object explicitly so Drizzle only writes fields the
+    // caller sent. `effective_to: null` (legitimate "open the schedule")
+    // is a real value, not a skip — so keep it in the payload when the
+    // key was present in the body.
+    const set: Record<string, unknown> = {};
+    if ('name' in body) set.name = body.name;
+    if ('effective_from' in body) set.effectiveFrom = body.effective_from;
+    if ('effective_to' in body) set.effectiveTo = body.effective_to ?? null;
+    if ('notes' in body) set.notes = body.notes ?? null;
     try {
       const [row] = await db
         .update(rateSchedules)
-        .set({ name: body.name, effectiveFrom: body.effective_from, effectiveTo: body.effective_to, notes: body.notes })
+        .set(set)
         .where(eq(rateSchedules.id, req.params.id))
         .returning();
       if (!row) throw new HttpError(404, 'not_found', 'Schedule not found');
@@ -184,13 +193,22 @@ rateSchedulesRouter.put(
 
 rateSchedulesRouter.delete(
   '/:id',
-  ah(async (req, res) => {
-    const [{ n }] = await db
+  ah(async (req: AuthedRequest, res) => {
+    // Pre-check FK references that would otherwise surface as raw 500s:
+    // a customer pointing at this schedule as their default. Invoices
+    // snapshot their rates so they don't reference the schedule directly.
+    const [{ n: defaultRefs }] = await db
       .select({ n: sql<number>`count(*)::int` })
-      .from(rateScheduleLines)
-      .where(sql`schedule_id = ${req.params.id} AND false`); // placeholder; invoices snapshot rates, no FK ref
-    void n;
-    await db.delete(rateSchedules).where(eq(rateSchedules.id, req.params.id));
+      .from(customers)
+      .where(eq(customers.defaultRateScheduleId, req.params.id));
+    if (defaultRefs > 0) {
+      return res.status(409).json(fail('in_use', `Cannot delete: ${defaultRefs} customer(s) use this as their default schedule. Pick a different default first.`));
+    }
+    await db.transaction(async (tx) => {
+      await tx.delete(rateScheduleLines).where(eq(rateScheduleLines.scheduleId, req.params.id));
+      await tx.delete(rateSchedules).where(eq(rateSchedules.id, req.params.id));
+    });
+    await writeAudit({ userId: req.user?.id, entityType: 'rate_schedule', entityId: req.params.id, action: 'delete', summary: `Deleted rate schedule` });
     res.json(ok({ deleted: true }));
   }),
 );

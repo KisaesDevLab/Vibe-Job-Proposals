@@ -23,7 +23,18 @@ export function InvoiceDetailPage({ id }: { id: string }) {
   const finalize = useMutation({
     mutationFn: () => api.post(`/invoices/${id}/finalize`),
     onSuccess: () => { toast('Invoice finalized'); qc.invalidateQueries({ queryKey: ['invoice', id] }); qc.invalidateQueries({ queryKey: ['invoices'] }); },
-    onError: (e: any) => toast(e.details ? `Blocked: ${e.details.map((b: any) => b.message).join('; ')}` : e.message, 'err'),
+    onError: (e: any) => {
+      // `e.details` is sometimes an array of blocker objects, sometimes
+      // undefined (plain HttpError). Guard against the non-array case to
+      // avoid the cryptic `[object Object]` toast we used to show.
+      const detail = Array.isArray(e.details) ? e.details.map((b: any) => b.message ?? String(b)).join('; ') : null;
+      toast(detail ? `Blocked: ${detail}` : (e.message ?? String(e)), 'err');
+    },
+  });
+  const regenerate = useMutation({
+    mutationFn: () => api.post(`/invoices/${id}/regenerate`),
+    onSuccess: () => { toast('Regenerating'); qc.invalidateQueries({ queryKey: ['invoice', id] }); },
+    onError: (e: any) => toast(e.message ?? String(e), 'err'),
   });
 
   if (isLoading) return <Skeleton rows={8} />;
@@ -55,7 +66,7 @@ export function InvoiceDetailPage({ id }: { id: string }) {
                 <Package size={15} /> Package PDF
               </a>
               <button className="btn-ghost" onClick={() => setEmailing(true)}><Mail size={15} /> Email</button>
-              <button className="btn-ghost" onClick={() => api.post(`/invoices/${id}/regenerate`).then(() => { toast('Regenerating'); qc.invalidateQueries({ queryKey: ['invoice', id] }); })}><RefreshCw size={15} /></button>
+              <button className="btn-ghost" onClick={() => regenerate.mutate()} disabled={regenerate.isPending} title="Regenerate DOCX/PDF/Package"><RefreshCw size={15} /></button>
               <button className="btn-danger" onClick={() => setVoiding(true)}><Ban size={15} /> Void</button>
             </>
           )}
