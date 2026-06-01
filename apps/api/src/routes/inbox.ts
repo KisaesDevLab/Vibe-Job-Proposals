@@ -12,9 +12,22 @@ import { paths } from '../storage.js';
 import { writeAudit } from '../audit.js';
 import { enqueueInboxToPdf } from '../queue.js';
 import { ingestInboxFile } from '../services/inbox-ingest.js';
+import { config } from '../config.js';
 
 export const inboxRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+// GET /api/inbox/public-link — admin-only. Returns the URL employees should
+// use to drop bills into the inbox without logging in, plus a flag telling
+// the UI whether public uploads are enabled at all (gated by
+// PUBLIC_UPLOAD_TOKEN in env).
+inboxRouter.get('/public-link', ah(async (_req, res) => {
+  const token = config.PUBLIC_UPLOAD_TOKEN;
+  if (!token) return res.json(ok({ enabled: false, url: null }));
+  const base = (config.APP_BASE_URL ?? '').replace(/\/+$/, '');
+  const url = `${base}/upload?k=${encodeURIComponent(token)}`;
+  res.json(ok({ enabled: true, url }));
+}));
 
 // POST /api/inbox — multi-file upload of bills into the processing box.
 inboxRouter.post(

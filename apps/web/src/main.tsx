@@ -26,6 +26,7 @@ import { CustomersPage } from './pages/Customers';
 import { EmployeesPage } from './pages/Employees';
 import { ReportsPage } from './pages/Reports';
 import { ReadinessPage } from './pages/Readiness';
+import { ImportPage } from './pages/Import';
 import { SettingsPage } from './pages/Settings';
 
 const queryClient = new QueryClient({
@@ -84,6 +85,7 @@ const customersRoute = createRoute({ getParentRoute: () => appRoute, path: '/cus
 const employeesRoute = createRoute({ getParentRoute: () => appRoute, path: '/employees', component: EmployeesPage });
 const reportsRoute = createRoute({ getParentRoute: () => appRoute, path: '/reports', component: ReportsPage });
 const readinessRoute = createRoute({ getParentRoute: () => appRoute, path: '/readiness', component: ReadinessPage });
+const importRoute = createRoute({ getParentRoute: () => appRoute, path: '/import', component: ImportPage });
 const settingsRoute = createRoute({ getParentRoute: () => appRoute, path: '/settings', component: SettingsPage });
 
 const routeTree = rootRoute.addChildren([
@@ -101,6 +103,7 @@ const routeTree = rootRoute.addChildren([
     employeesRoute,
     reportsRoute,
     readinessRoute,
+    importRoute,
     settingsRoute,
   ]),
 ]);

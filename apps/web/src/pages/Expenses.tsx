@@ -1,11 +1,12 @@
-import { useState, useRef } from 'react';
+import { useMemo, useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Paperclip, Download, Inbox as InboxIcon, Trash2, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
-import { formatMoney, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '@darrow/shared';
+import { formatMoney, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS, type ExpenseCategory } from '@darrow/shared';
 import { PageHeader } from '@/components/Layout';
 import { Modal, Skeleton, Empty, Badge, Spinner, toast } from '@/components/ui';
 import { SearchSelect } from '@/components/SearchSelect';
+import { SortableHeader, nextSort, compareValues, type SortState } from '@/components/SortableHeader';
 
 interface Expense { id: string; workDate: string; vendor: string; amount: string; category: string; invoiceId: string | null; attachment_count: number; }
 
@@ -26,31 +27,86 @@ export function ExpensesPage() {
   );
 }
 
+type ExpSort = 'workDate' | 'vendor' | 'category' | 'amount' | 'attachment_count' | 'invoiceId';
+interface ExpFilters { workDate: string; vendor: string; category: '' | ExpenseCategory; amountMin: string; status: '' | 'billed' | 'unbilled'; }
+const EXP_EMPTY: ExpFilters = { workDate: '', vendor: '', category: '', amountMin: '', status: '' };
+
 function ExpenseList() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['expenses'], queryFn: () => api.get<{ expenses: Expense[] }>('/expenses?pageSize=100') });
+  const { data, isLoading } = useQuery({ queryKey: ['expenses'], queryFn: () => api.get<{ expenses: Expense[] }>('/expenses?pageSize=500') });
   const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState<Expense | null>(null);
+  const [sort, setSort] = useState<SortState<ExpSort>>({ key: 'workDate', dir: 'desc' });
+  const [filters, setFilters] = useState<ExpFilters>(EXP_EMPTY);
+  const filterActive = Object.values(filters).some(Boolean);
+
+  const filtered = useMemo(() => {
+    const rows = data?.expenses ?? [];
+    const minAmt = Number(filters.amountMin || 0);
+    const matches = rows.filter((x) =>
+      (!filters.workDate || x.workDate.includes(filters.workDate)) &&
+      (!filters.vendor || x.vendor.toLowerCase().includes(filters.vendor.toLowerCase())) &&
+      (!filters.category || x.category === filters.category) &&
+      (!filters.amountMin || Number(x.amount) >= minAmt) &&
+      (!filters.status || (filters.status === 'billed' ? !!x.invoiceId : !x.invoiceId)),
+    );
+    return [...matches].sort((a, b) => {
+      const numeric: ExpSort[] = ['amount', 'attachment_count'];
+      const av = sort.key === 'invoiceId' ? (a.invoiceId ? 'billed' : 'unbilled') : numeric.includes(sort.key) ? Number((a as any)[sort.key] ?? 0) : (a as any)[sort.key];
+      const bv = sort.key === 'invoiceId' ? (b.invoiceId ? 'billed' : 'unbilled') : numeric.includes(sort.key) ? Number((b as any)[sort.key] ?? 0) : (b as any)[sort.key];
+      return compareValues(av, bv, sort.dir);
+    });
+  }, [data, filters, sort]);
+
   return (
     <div>
       <div className="mb-3 flex justify-end"><button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New Expense</button></div>
       {isLoading ? <Skeleton /> : !data?.expenses.length ? <Empty title="No expenses yet" /> : (
         <div className="card overflow-hidden">
-          <table className="w-full">
-            <thead><tr><th className="th">Date</th><th className="th">Vendor</th><th className="th">Category</th><th className="th">Amount</th><th className="th">Files</th><th className="th">Status</th></tr></thead>
-            <tbody>
-              {data.expenses.map((x) => (
-                <tr key={x.id} className="cursor-pointer hover:bg-paper" onClick={() => setDetail(x)}>
-                  <td className="td">{x.workDate}</td>
-                  <td className="td font-medium">{x.vendor}</td>
-                  <td className="td">{EXPENSE_CATEGORY_LABELS[x.category as keyof typeof EXPENSE_CATEGORY_LABELS]}</td>
-                  <td className="td">{formatMoney(x.amount)}</td>
-                  <td className="td">{x.attachment_count > 0 && <span className="inline-flex items-center gap-1 text-muted"><Paperclip size={13} />{x.attachment_count}</span>}</td>
-                  <td className="td">{x.invoiceId ? <Badge status="finalized">billed</Badge> : <Badge>unbilled</Badge>}</td>
+          <div className="flex items-center justify-between border-b border-line px-3 py-2 text-xs text-muted">
+            <span>{filtered.length} of {data.expenses.length} expense{data.expenses.length === 1 ? '' : 's'}</span>
+            {filterActive && <button className="text-copper hover:underline" onClick={() => setFilters(EXP_EMPTY)}>Clear filters</button>}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <SortableHeader<ExpSort> label="Date" sortKey="workDate" sort={sort} onSort={(k) => setSort((s) => nextSort(s, k))} />
+                  <SortableHeader<ExpSort> label="Vendor" sortKey="vendor" sort={sort} onSort={(k) => setSort((s) => nextSort(s, k))} />
+                  <SortableHeader<ExpSort> label="Category" sortKey="category" sort={sort} onSort={(k) => setSort((s) => nextSort(s, k))} />
+                  <SortableHeader<ExpSort> label="Amount" sortKey="amount" sort={sort} onSort={(k) => setSort((s) => nextSort(s, k))} align="right" />
+                  <SortableHeader<ExpSort> label="Files" sortKey="attachment_count" sort={sort} onSort={(k) => setSort((s) => nextSort(s, k))} align="right" />
+                  <SortableHeader<ExpSort> label="Status" sortKey="invoiceId" sort={sort} onSort={(k) => setSort((s) => nextSort(s, k))} />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+                <tr className="bg-paper/50">
+                  <th className="px-3 py-1.5"><input className="input h-8 py-1 text-xs" placeholder="YYYY-MM" value={filters.workDate} onChange={(e) => setFilters({ ...filters, workDate: e.target.value })} /></th>
+                  <th className="px-3 py-1.5"><input className="input h-8 py-1 text-xs" placeholder="filter…" value={filters.vendor} onChange={(e) => setFilters({ ...filters, vendor: e.target.value })} /></th>
+                  <th className="px-3 py-1.5">
+                    <SearchSelect value={filters.category} onChange={(v) => setFilters({ ...filters, category: v as any })} options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: EXPENSE_CATEGORY_LABELS[c] }))} placeholder="all" allowClear />
+                  </th>
+                  <th className="px-3 py-1.5"><input className="input h-8 py-1 text-xs" inputMode="decimal" placeholder="≥" value={filters.amountMin} onChange={(e) => setFilters({ ...filters, amountMin: e.target.value.replace(/[^0-9.]/g, '') })} /></th>
+                  <th className="px-3 py-1.5"></th>
+                  <th className="px-3 py-1.5">
+                    <SearchSelect value={filters.status} onChange={(v) => setFilters({ ...filters, status: v as any })} options={[{ value: 'unbilled', label: 'unbilled' }, { value: 'billed', label: 'billed' }]} placeholder="all" allowClear />
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 ? (
+                  <tr><td colSpan={6} className="td text-center text-muted">No expenses match the current filters</td></tr>
+                ) : filtered.map((x) => (
+                  <tr key={x.id} className="cursor-pointer hover:bg-paper" onClick={() => setDetail(x)}>
+                    <td className="td">{x.workDate}</td>
+                    <td className="td font-medium">{x.vendor}</td>
+                    <td className="td">{EXPENSE_CATEGORY_LABELS[x.category as keyof typeof EXPENSE_CATEGORY_LABELS]}</td>
+                    <td className="td text-right">{formatMoney(x.amount)}</td>
+                    <td className="td text-right">{x.attachment_count > 0 && <span className="inline-flex items-center gap-1 text-muted"><Paperclip size={13} />{x.attachment_count}</span>}</td>
+                    <td className="td">{x.invoiceId ? <Badge status="finalized">billed</Badge> : <Badge>unbilled</Badge>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
       {creating && <ExpenseForm onClose={() => setCreating(false)} onSaved={() => { qc.invalidateQueries({ queryKey: ['expenses'] }); setCreating(false); }} />}
@@ -258,10 +314,18 @@ function InboxTab() {
     queryFn: () => api.get<InboxDoc[]>('/inbox'),
     refetchInterval: (q) => (q.state.data?.some((d) => d.status === 'pending') ? 2000 : false),
   });
+  const { data: link } = useQuery({
+    queryKey: ['inbox-public-link'],
+    queryFn: () => api.get<{ enabled: boolean; url: string | null }>('/inbox/public-link'),
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ['inbox'] });
+  function copyLink() {
+    if (!link?.url) return;
+    navigator.clipboard.writeText(link.url).then(() => toast('Link copied')).catch(() => toast('Copy failed — select and copy manually', 'err'));
+  }
 
   async function upload(files: FileList | File[]) {
     const arr = Array.from(files);
@@ -284,6 +348,26 @@ function InboxTab() {
 
   return (
     <div>
+      {/* Employee upload link — visible only when PUBLIC_UPLOAD_TOKEN is set
+          on the server. Field workers paste/photograph their bills here
+          without needing a login. */}
+      {link && (
+        <div className="mb-4 card p-4">
+          <div className="mb-1 text-sm font-semibold">Employee upload link</div>
+          {link.enabled && link.url ? (
+            <>
+              <p className="mb-2 text-xs text-muted">Share this URL with field workers to upload receipts directly. They don't need to log in. Treat the URL like a password — anyone with it can submit bills.</p>
+              <div className="flex items-center gap-2">
+                <input className="input flex-1 font-mono text-xs" readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} />
+                <button className="btn-ghost" onClick={copyLink}>Copy</button>
+                <a className="btn-ghost" href={link.url} target="_blank" rel="noreferrer">Open</a>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-muted">Public uploads are disabled. Set <span className="font-mono">PUBLIC_UPLOAD_TOKEN</span> in the app environment to enable a no-login link for employees.</p>
+          )}
+        </div>
+      )}
       <div
         className="mb-4 flex items-center justify-center gap-3 rounded-xl border-2 border-dashed border-line bg-card p-6 text-sm text-muted"
         onDragOver={(e) => e.preventDefault()}

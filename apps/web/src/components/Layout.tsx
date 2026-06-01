@@ -16,6 +16,7 @@ import {
   Maximize2,
   Minimize2,
   Type,
+  Upload,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
@@ -38,6 +39,7 @@ const NAV = [
   { group: 'Insight', items: [
     { to: '/reports', label: 'Reports', icon: BarChart3 },
     { to: '/readiness', label: 'Readiness', icon: ShieldCheck },
+    { to: '/import', label: 'Import', icon: Upload },
     { to: '/settings', label: 'Settings', icon: SettingsIcon },
   ] },
 ];
