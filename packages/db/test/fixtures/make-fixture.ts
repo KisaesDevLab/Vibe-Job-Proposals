@@ -3,7 +3,7 @@
 // in the repo. Run: npx tsx packages/db/test/fixtures/make-fixture.ts [outPath]
 import ExcelJS from 'exceljs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -97,7 +97,7 @@ export async function makeFixture(outPath: string): Promise<string> {
   return outPath;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const out = process.argv[2] ?? join(__dirname, 'Time_Allocation_Tracking.xlsx');
   makeFixture(out).then((p) => console.log(`wrote fixture ${p}`));
 }

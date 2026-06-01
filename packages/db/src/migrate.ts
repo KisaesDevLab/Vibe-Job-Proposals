@@ -1,7 +1,7 @@
 // Idempotent migration runner. Applies numbered SQL files in order, recording
 // applied filenames in a _migrations table so re-runs are no-ops.
 import { readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import postgres from 'postgres';
 
@@ -42,7 +42,7 @@ export async function runMigrations(databaseUrl = process.env.DATABASE_URL): Pro
 }
 
 // Run when invoked directly.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   runMigrations().then(
     () => process.exit(0),
     (err) => {

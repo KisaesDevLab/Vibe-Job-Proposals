@@ -11,6 +11,7 @@ export const QUEUE_NAMES = {
   inboxToPdf: 'inbox-to-pdf',
   renderDocx: 'render-docx',
   docxToPdf: 'docx-to-pdf',
+  renderPackage: 'render-package',
   sendEmail: 'send-invoice-email',
 } as const;
 
@@ -18,6 +19,7 @@ export const imageToPdfQueue = new Queue(QUEUE_NAMES.imageToPdf, { connection: c
 export const inboxToPdfQueue = new Queue(QUEUE_NAMES.inboxToPdf, { connection: connection as any });
 export const renderDocxQueue = new Queue(QUEUE_NAMES.renderDocx, { connection: connection as any });
 export const docxToPdfQueue = new Queue(QUEUE_NAMES.docxToPdf, { connection: connection as any });
+export const renderPackageQueue = new Queue(QUEUE_NAMES.renderPackage, { connection: connection as any });
 export const sendEmailQueue = new Queue(QUEUE_NAMES.sendEmail, { connection: connection as any });
 
 const defaultOpts = { attempts: 3, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 100, removeOnFail: 200 };
@@ -33,6 +35,9 @@ export async function enqueueRenderDocx(invoiceId: string): Promise<void> {
 }
 export async function enqueueDocxToPdf(invoiceId: string): Promise<void> {
   await docxToPdfQueue.add('convert', { invoiceId }, { ...defaultOpts, attempts: 2 });
+}
+export async function enqueueRenderPackage(invoiceId: string): Promise<void> {
+  await renderPackageQueue.add('render', { invoiceId }, { ...defaultOpts, attempts: 2 });
 }
 export async function enqueueSendEmail(emailId: string): Promise<void> {
   await sendEmailQueue.add('send', { emailId }, { ...defaultOpts, attempts: 3 });

@@ -37,6 +37,14 @@ export const markupMapSchema = z.array(
   z.object({ category: categoryEnum, percent }),
 );
 
+// Per-customer overhead config. Any field nullable to clear that piece; line
+// is only emitted by the invoice service when all three are set and percent > 0.
+export const customerOverheadSchema = z.object({
+  employee_id: z.string().uuid().nullable(),
+  hourly_rate: z.coerce.number().nonnegative().nullable(),
+  percent: z.coerce.number().min(0).max(1).nullable(),
+});
+
 export const rateLevelSchema = z.object({
   name: z.string().min(1).max(100),
   sort_order: z.coerce.number().int().optional(),

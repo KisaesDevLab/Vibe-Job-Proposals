@@ -37,6 +37,7 @@ export const lineType = pgEnum('line_type', [
   'expense_subtotal',
   'expense_markup',
   'grand_total',
+  'overhead',
 ]);
 export const tierEnum = pgEnum('tier', ['st', 'ot', 'dt']);
 
@@ -144,6 +145,9 @@ export const customers = pgTable('customers', {
   active: boolean('active').notNull().default(true),
   notes: text('notes'),
   defaultRateScheduleId: uuid('default_rate_schedule_id'),
+  overheadEmployeeId: uuid('overhead_employee_id'),
+  overheadHourlyRate: numeric('overhead_hourly_rate', { precision: 12, scale: 2 }),
+  overheadPercent: numeric('overhead_percent', { precision: 5, scale: 4 }),
   importedFromXlsm: boolean('imported_from_xlsm').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -269,9 +273,12 @@ export const invoices = pgTable('invoices', {
   voidedByUserId: uuid('voided_by_user_id').references(() => users.id),
   generatedDocxPath: text('generated_docx_path'),
   generatedPdfPath: text('generated_pdf_path'),
+  generatedPackagePath: text('generated_package_path'),
   docxStatus: attachmentStatus('docx_status'),
   pdfStatus: attachmentStatus('pdf_status'),
+  packageStatus: attachmentStatus('package_status'),
   generationError: text('generation_error'),
+  packageError: text('package_error'),
   importedFromXlsm: boolean('imported_from_xlsm').notNull().default(false),
   totalLabor: numeric('total_labor', { precision: 12, scale: 2 }),
   totalLaborCost: numeric('total_labor_cost', { precision: 12, scale: 2 }),
@@ -284,6 +291,7 @@ export const invoices = pgTable('invoices', {
   totalStockMaterial: numeric('total_stock_material', { precision: 12, scale: 2 }),
   totalMarkup: numeric('total_markup', { precision: 12, scale: 2 }),
   totalExpenseCost: numeric('total_expense_cost', { precision: 12, scale: 2 }),
+  totalOverhead: numeric('total_overhead', { precision: 12, scale: 2 }),
   grandTotal: numeric('grand_total', { precision: 12, scale: 2 }),
 });
 

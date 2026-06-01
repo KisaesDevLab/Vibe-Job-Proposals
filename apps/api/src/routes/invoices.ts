@@ -16,7 +16,7 @@ import { ah, HttpError } from '../error-handler.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 import { writeAudit } from '../audit.js';
 import { buildPreview, finalizeInvoice } from '../services/invoice.js';
-import { enqueueRenderDocx, enqueueSendEmail } from '../queue.js';
+import { enqueueRenderDocx, enqueueRenderPackage, enqueueSendEmail } from '../queue.js';
 
 export const invoicesRouter = Router();
 
@@ -28,7 +28,7 @@ invoicesRouter.get(
     const rows = await rawsql<any[]>`
       SELECT i.id, i.billed_reference, i.sequence_number, i.status, i.through_date::text AS through_date,
              i.grand_total, i.created_at, i.finalized_at, i.imported_from_xlsm,
-             i.docx_status, i.pdf_status, j.code AS job_code, j.customer_id, c.name AS customer_name
+             i.docx_status, i.pdf_status, i.package_status, j.code AS job_code, j.customer_id, c.name AS customer_name
       FROM invoices i JOIN jobs j ON j.id=i.job_id JOIN customers c ON c.id=j.customer_id
       WHERE (${status ?? null}::text IS NULL OR i.status = ${status ?? null}::invoice_status)
         AND (${status ? true : includeVoid} OR i.status != 'void')
@@ -165,7 +165,9 @@ invoicesRouter.post(
   ah(async (req: AuthedRequest, res) => {
     const result = await finalizeInvoice(req.params.id, req.user?.id ?? null);
     await writeAudit({ userId: req.user?.id, entityType: 'invoice', entityId: req.params.id, action: 'finalize', summary: `Finalized invoice ${result.billed_reference}` });
+    await rawsql`UPDATE invoices SET package_status='pending', package_error=NULL WHERE id=${req.params.id}`;
     await enqueueRenderDocx(req.params.id);
+    await enqueueRenderPackage(req.params.id);
     res.json(ok(result));
   }),
 );
@@ -193,8 +195,9 @@ invoicesRouter.post(
   ah(async (req, res) => {
     const [inv] = await db.select().from(invoices).where(eq(invoices.id, req.params.id));
     if (!inv) throw new HttpError(404, 'not_found', 'Invoice not found');
-    await db.update(invoices).set({ docxStatus: 'pending', pdfStatus: 'pending', generationError: null }).where(eq(invoices.id, inv.id));
+    await db.update(invoices).set({ docxStatus: 'pending', pdfStatus: 'pending', packageStatus: 'pending', generationError: null, packageError: null }).where(eq(invoices.id, inv.id));
     await enqueueRenderDocx(inv.id);
+    await enqueueRenderPackage(inv.id);
     res.json(ok({ regenerating: true }));
   }),
 );
@@ -220,6 +223,15 @@ invoicesRouter.get(
     const [inv] = await db.select().from(invoices).where(eq(invoices.id, req.params.id));
     if (!inv) throw new HttpError(404, 'not_found', 'Invoice not found');
     streamFile(res, inv.generatedPdfPath, 'application/pdf', `${inv.billedReference ?? inv.id}.pdf`);
+  }),
+);
+
+invoicesRouter.get(
+  '/:id/package',
+  ah(async (req, res) => {
+    const [inv] = await db.select().from(invoices).where(eq(invoices.id, req.params.id));
+    if (!inv) throw new HttpError(404, 'not_found', 'Invoice not found');
+    streamFile(res, inv.generatedPackagePath, 'application/pdf', `${inv.billedReference ?? inv.id}.package.pdf`);
   }),
 );
 

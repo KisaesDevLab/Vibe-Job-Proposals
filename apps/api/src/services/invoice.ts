@@ -44,7 +44,7 @@ export interface InvoicePreview {
   job_id: string;
   customer_id: string;
   labor_lines: Array<{
-    time_entry_id: string;
+    time_entry_id: string | null;
     employee_id: string;
     employee_name: string;
     tier: Tier;
@@ -53,6 +53,7 @@ export interface InvoicePreview {
     rate: number;
     amount: number;
     cost_amount: number;
+    is_overhead?: boolean;
   }>;
   expense_lines: Array<{
     expense_id: string;
@@ -161,6 +162,39 @@ export async function buildPreview(invoiceId: string): Promise<InvoicePreview | 
   }
 
   const totals = computeInvoiceTotals(pricedTime, pricedExp);
+
+  // Customer overhead: synthetic labor-style line emitted only when all three
+  // customer fields are set, the percent is > 0, and there is base labor to
+  // apply the percent against. Pure margin (cost_amount = 0) per design.
+  const [customer] = await rawsql<any[]>`
+    SELECT overhead_employee_id, overhead_hourly_rate, overhead_percent
+    FROM customers WHERE id = ${customerId}`;
+  const ohEmp = customer?.overhead_employee_id as string | null;
+  const ohRate = customer?.overhead_hourly_rate != null ? Number(customer.overhead_hourly_rate) : null;
+  const ohPct = customer?.overhead_percent != null ? Number(customer.overhead_percent) : null;
+  if (ohEmp && ohRate && ohRate > 0 && ohPct && ohPct > 0 && totals.total_labor > 0) {
+    const [empRow] = await rawsql<any[]>`SELECT name FROM employees WHERE id = ${ohEmp}`;
+    if (empRow) {
+      const overheadAmount = Math.round(totals.total_labor * ohPct * 100) / 100;
+      const overheadHours = Math.round((overheadAmount / ohRate) * 100) / 100;
+      laborLines.push({
+        time_entry_id: null,
+        employee_id: ohEmp,
+        employee_name: empRow.name,
+        tier: 'st',
+        tier_label: TIER_LABELS.st,
+        hours: overheadHours,
+        rate: ohRate,
+        amount: overheadAmount,
+        cost_amount: 0,
+        is_overhead: true,
+      });
+      totals.total_overhead = overheadAmount;
+      totals.total_labor = Math.round((totals.total_labor + overheadAmount) * 100) / 100;
+      totals.grand_total = Math.round((totals.grand_total + overheadAmount) * 100) / 100;
+    }
+  }
+
   return {
     invoice_id: invoiceId,
     job_id: inv.job_id,
@@ -202,7 +236,16 @@ export async function finalizeInvoice(invoiceId: string, userId: string | null):
 
     for (const l of preview.labor_lines) {
       if (l.amount === 0) continue;
-      await ins({ line_type: 'labor', employee_id: l.employee_id, description: `${l.employee_name} – ${l.tier_label}`, tier: l.tier, quantity: l.hours, unit_rate: l.rate, amount: l.amount, cost_amount: l.cost_amount });
+      await ins({
+        line_type: l.is_overhead ? 'overhead' : 'labor',
+        employee_id: l.employee_id,
+        description: l.is_overhead ? `${l.employee_name} – Overhead` : `${l.employee_name} – ${l.tier_label}`,
+        tier: l.tier,
+        quantity: l.hours,
+        unit_rate: l.rate,
+        amount: l.amount,
+        cost_amount: l.cost_amount,
+      });
     }
     if (preview.labor_lines.some((l) => l.amount > 0)) {
       await ins({ line_type: 'labor_subtotal', description: 'Labor Subtotal', amount: preview.totals.total_labor, cost_amount: preview.totals.total_labor_cost });
@@ -240,7 +283,8 @@ export async function finalizeInvoice(invoiceId: string, userId: string | null):
       total_materials=${t.total_materials}, total_equipment_rent=${t.total_equipment_rent},
       total_truck_rental=${t.total_truck_rental}, total_per_diem=${t.total_per_diem},
       total_travel=${t.total_travel}, total_freight=${t.total_freight}, total_stock_material=${t.total_stock_material},
-      total_markup=${t.total_markup}, total_expense_cost=${t.total_expense_cost}, grand_total=${t.grand_total},
+      total_markup=${t.total_markup}, total_expense_cost=${t.total_expense_cost},
+      total_overhead=${t.total_overhead}, grand_total=${t.grand_total},
       docx_status='pending', pdf_status='pending'
       WHERE id=${invoiceId}`;
 

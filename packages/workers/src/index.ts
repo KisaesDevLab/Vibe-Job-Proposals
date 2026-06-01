@@ -2,6 +2,7 @@ import { startImageToPdfWorker } from './image-to-pdf.js';
 import { startInboxToPdfWorker } from './inbox-to-pdf.js';
 import { startRenderDocxWorker } from './render-docx.js';
 import { startDocxToPdfWorker } from './docx-to-pdf.js';
+import { startRenderPackageWorker } from './render-package.js';
 import { startSendEmailWorker } from './send-email.js';
 import { convertDocxToPdf } from './docx-to-pdf.js';
 import { logger } from './connection.js';
@@ -39,8 +40,9 @@ async function main() {
   startInboxToPdfWorker();
   startRenderDocxWorker();
   startDocxToPdfWorker();
+  startRenderPackageWorker();
   startSendEmailWorker();
-  logger.info('workers started', { queues: ['image-to-pdf', 'inbox-to-pdf', 'render-docx', 'docx-to-pdf', 'send-invoice-email'] });
+  logger.info('workers started', { queues: ['image-to-pdf', 'inbox-to-pdf', 'render-docx', 'docx-to-pdf', 'render-package', 'send-invoice-email'] });
 }
 
 main().catch((err) => {

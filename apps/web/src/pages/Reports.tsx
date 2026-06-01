@@ -4,6 +4,7 @@ import { Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/Layout';
 import { Empty } from '@/components/ui';
+import { SearchSelect } from '@/components/SearchSelect';
 
 const REPORTS = [
   { key: 'employee-hours', label: 'Hours by Employee' },
@@ -24,13 +25,20 @@ export function ReportsPage() {
     <div>
       <PageHeader title="Reports" subtitle="Hours & expense breakdowns by job/invoice" />
       <div className="mb-4 flex flex-wrap gap-2">
-        <select className="input max-w-xs" value={report} onChange={(e) => setReport(e.target.value)}>
-          {REPORTS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
-        </select>
-        <select className="input max-w-xs" value={jobId} onChange={(e) => setJobId(e.target.value)}>
-          <option value="">Select job…</option>
-          {jobs?.jobs.map((j) => <option key={j.id} value={j.id}>{j.code} — {j.description}</option>)}
-        </select>
+        <SearchSelect
+          className="max-w-xs"
+          value={report}
+          onChange={setReport}
+          options={REPORTS.map((r) => ({ value: r.key, label: r.label }))}
+        />
+        <SearchSelect
+          className="max-w-xs"
+          value={jobId}
+          onChange={setJobId}
+          options={(jobs?.jobs ?? []).map((j) => ({ value: j.id, label: j.code, sublabel: j.description }))}
+          placeholder="Select job…"
+          allowClear
+        />
         {jobId && <a className="btn-ghost" href={`/api/reports/${report}?job_id=${jobId}&format=csv`}><Download size={15} /> CSV</a>}
       </div>
       {!jobId ? <Empty title="Select a job to run a report" /> : isFetching ? <Empty title="Loading…" /> : !data?.length ? <Empty title="No data for this job" /> : (

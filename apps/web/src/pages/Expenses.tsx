@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { formatMoney, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '@darrow/shared';
 import { PageHeader } from '@/components/Layout';
 import { Modal, Skeleton, Empty, Badge, Spinner, toast } from '@/components/ui';
+import { SearchSelect } from '@/components/SearchSelect';
 
 interface Expense { id: string; workDate: string; vendor: string; amount: string; category: string; invoiceId: string | null; attachment_count: number; }
 
@@ -70,10 +71,23 @@ function ExpenseForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
           <div><label className="label">Date</label><input type="date" className="input" value={f.work_date} onChange={set('work_date')} /></div>
           <div><label className="label">Amount</label><input className="input" value={f.amount} onChange={set('amount')} /></div>
         </div>
-        <div><label className="label">Job</label><select className="input" value={f.job_id} onChange={set('job_id')}><option value="">Select…</option>{jobs?.jobs.map((j) => <option key={j.id} value={j.id}>{j.code} — {j.description}</option>)}</select></div>
+        <div><label className="label">Job</label>
+          <SearchSelect
+            value={f.job_id}
+            onChange={(v) => setF({ ...f, job_id: v })}
+            options={(jobs?.jobs ?? []).map((j: any) => ({ value: j.id, label: j.code, sublabel: j.description }))}
+            placeholder="Select…"
+          />
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <div><label className="label">Vendor</label><input className="input" value={f.vendor} onChange={set('vendor')} /></div>
-          <div><label className="label">Category</label><select className="input" value={f.category} onChange={set('category')}>{EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{EXPENSE_CATEGORY_LABELS[c]}</option>)}</select></div>
+          <div><label className="label">Category</label>
+            <SearchSelect
+              value={f.category}
+              onChange={(v) => setF({ ...f, category: v })}
+              options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: EXPENSE_CATEGORY_LABELS[c] }))}
+            />
+          </div>
         </div>
         <div><label className="label">Description</label><input className="input" value={f.description} onChange={set('description')} /></div>
         <div className="flex justify-end gap-2 pt-2"><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" onClick={() => m.mutate()} disabled={!f.job_id || !f.vendor || !f.amount || m.isPending}>Save</button></div>
@@ -85,38 +99,150 @@ function ExpenseForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
 function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onClose: () => void; onChanged: () => void }) {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ['expense', expense.id], queryFn: () => api.get<any>(`/expenses/${expense.id}`), refetchInterval: (q) => (q.state.data?.attachments?.some((a: any) => a.status === 'pending') ? 2000 : false) });
+  const { data: jobs } = useQuery({ queryKey: ['jobs-active'], queryFn: () => api.get<{ jobs: any[] }>('/jobs?active=true&pageSize=300') });
   const [uploading, setUploading] = useState(false);
+  const [f, setF] = useState<{ work_date: string; job_id: string; vendor: string; amount: string; category: string; reference: string; description: string } | null>(null);
+  // Initialize the editable form once the detail loads (or after a save refetch
+  // overwrites the row with server-canonical values).
+  const rowKey = data ? `${data.updatedAt ?? ''}|${data.id}` : '';
+  const [seededFrom, setSeededFrom] = useState('');
+  if (data && rowKey !== seededFrom) {
+    setF({
+      work_date: data.workDate ?? data.work_date ?? '',
+      job_id: data.jobId ?? data.job_id ?? '',
+      vendor: data.vendor ?? '',
+      amount: String(data.amount ?? ''),
+      category: data.category ?? 'materials',
+      reference: data.reference ?? '',
+      description: data.description ?? '',
+    });
+    setSeededFrom(rowKey);
+  }
+  const locked = !!(data?.invoiceId ?? data?.invoice_id);
+
+  const save = useMutation({
+    mutationFn: () => api.put(`/expenses/${expense.id}`, {
+      work_date: f!.work_date,
+      job_id: f!.job_id,
+      vendor: f!.vendor,
+      amount: Number(f!.amount),
+      category: f!.category,
+      reference: f!.reference || null,
+      description: f!.description || null,
+    }),
+    onSuccess: () => {
+      toast('Expense updated');
+      qc.invalidateQueries({ queryKey: ['expense', expense.id] });
+      onChanged();
+    },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+  const del = useMutation({
+    mutationFn: () => api.del(`/expenses/${expense.id}`),
+    onSuccess: () => { toast('Expense deleted'); onChanged(); onClose(); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+
   async function upload(file: File) {
     setUploading(true);
     try { await api.upload(`/expenses/${expense.id}/attachments`, file); toast('Uploaded'); qc.invalidateQueries({ queryKey: ['expense', expense.id] }); onChanged(); }
     catch (e: any) { toast(e.message, 'err'); }
     finally { setUploading(false); }
   }
+
+  const set = (k: keyof NonNullable<typeof f>) => (e: any) => f && setF({ ...f, [k]: e.target.value });
+  const title = data ? `${data.vendor} — ${formatMoney(data.amount)}` : `${expense.vendor} — ${formatMoney(expense.amount)}`;
+  const dirty = !!f && !!data && (
+    f.work_date !== (data.workDate ?? '') ||
+    f.job_id !== (data.jobId ?? '') ||
+    f.vendor !== (data.vendor ?? '') ||
+    Number(f.amount) !== Number(data.amount) ||
+    f.category !== (data.category ?? '') ||
+    (f.reference || '') !== (data.reference ?? '') ||
+    (f.description || '') !== (data.description ?? '')
+  );
+
   return (
-    <Modal open onClose={onClose} title={`${expense.vendor} — ${formatMoney(expense.amount)}`}>
-      <div className="space-y-3">
-        <div className="rounded-lg border border-dashed border-line p-4 text-center">
-          <input type="file" id="att" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} accept=".pdf,.png,.jpg,.jpeg,.webp,.heic" />
-          <label htmlFor="att" className="btn-ghost cursor-pointer">{uploading ? 'Uploading…' : 'Add attachment (PDF/image)'}</label>
-        </div>
-        <div className="space-y-2">
-          {data?.attachments?.map((a: any) => (
-            <div key={a.id} className="flex items-center justify-between rounded-lg border border-line p-2 text-sm">
-              <span className="flex items-center gap-2">
-                {a.status === 'ready' ? (
-                  <img src={`/api/expenses/attachments/${a.id}/preview`} alt="" className="h-10 w-8 rounded border border-line object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
-                ) : (
-                  <Paperclip size={14} />
-                )}
-                {a.originalFilename}
-              </span>
-              <span className="flex items-center gap-2">
-                <Badge status={a.status}>{a.status}</Badge>
-                {a.status === 'ready' && <a className="text-copper" href={`/api/expenses/attachments/${a.id}/download`} target="_blank" rel="noreferrer"><Download size={15} /></a>}
-              </span>
+    <Modal open onClose={onClose} title={title} wide>
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+        <div className="space-y-3">
+          {locked && (
+            <div className="rounded-lg bg-paper px-3 py-2 text-xs text-muted">
+              This expense is billed on an invoice and locked. Void the invoice first to edit.
             </div>
-          ))}
-          {!data?.attachments?.length && <div className="text-center text-sm text-muted">No attachments</div>}
+          )}
+          {!f ? <Skeleton rows={4} /> : (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div><label className="label">Date</label><input type="date" className="input" value={f.work_date} onChange={set('work_date')} disabled={locked} /></div>
+                <div><label className="label">Amount</label><input className="input" value={f.amount} onChange={set('amount')} disabled={locked} /></div>
+              </div>
+              <div><label className="label">Job</label>
+                <SearchSelect
+                  value={f.job_id}
+                  onChange={(v) => setF({ ...f, job_id: v })}
+                  options={(jobs?.jobs ?? []).map((j: any) => ({ value: j.id, label: j.code, sublabel: j.description }))}
+                  placeholder="Select…"
+                  disabled={locked}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><label className="label">Vendor</label><input className="input" value={f.vendor} onChange={set('vendor')} disabled={locked} /></div>
+                <div><label className="label">Category</label>
+                  <SearchSelect
+                    value={f.category}
+                    onChange={(v) => setF({ ...f, category: v })}
+                    options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: EXPENSE_CATEGORY_LABELS[c] }))}
+                    disabled={locked}
+                  />
+                </div>
+              </div>
+              <div><label className="label">Reference</label><input className="input" value={f.reference} onChange={set('reference')} placeholder="vendor invoice #" disabled={locked} /></div>
+              <div><label className="label">Description</label><input className="input" value={f.description} onChange={set('description')} disabled={locked} /></div>
+              <div className="flex items-center justify-between pt-1">
+                <button className="btn-ghost text-red" onClick={() => del.mutate()} disabled={locked || del.isPending}>
+                  <Trash2 size={15} /> Delete
+                </button>
+                <div className="flex gap-2">
+                  <button className="btn-ghost" onClick={onClose}>Close</button>
+                  <button
+                    className="btn-primary"
+                    onClick={() => save.mutate()}
+                    disabled={locked || !dirty || !f.vendor || !f.job_id || !(Number(f.amount) > 0) || save.isPending}
+                  >
+                    {save.isPending ? 'Saving…' : 'Save changes'}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-semibold">Attachments</div>
+          <div className="rounded-lg border border-dashed border-line p-4 text-center">
+            <input type="file" id="att" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} accept=".pdf,.png,.jpg,.jpeg,.webp,.heic" />
+            <label htmlFor="att" className="btn-ghost cursor-pointer">{uploading ? 'Uploading…' : 'Add attachment (PDF/image)'}</label>
+          </div>
+          <div className="space-y-2">
+            {data?.attachments?.map((a: any) => (
+              <div key={a.id} className="flex items-center justify-between rounded-lg border border-line p-2 text-sm">
+                <span className="flex items-center gap-2">
+                  {a.status === 'ready' ? (
+                    <img src={`/api/expenses/attachments/${a.id}/preview`} alt="" className="h-10 w-8 rounded border border-line object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
+                  ) : (
+                    <Paperclip size={14} />
+                  )}
+                  {a.originalFilename}
+                </span>
+                <span className="flex items-center gap-2">
+                  <Badge status={a.status}>{a.status}</Badge>
+                  {a.status === 'ready' && <a className="text-copper" href={`/api/expenses/attachments/${a.id}/download`} target="_blank" rel="noreferrer"><Download size={15} /></a>}
+                </span>
+              </div>
+            ))}
+            {!data?.attachments?.length && <div className="text-center text-sm text-muted">No attachments</div>}
+          </div>
         </div>
       </div>
     </Modal>
@@ -246,10 +372,23 @@ function InboxEntryForm({ doc, onProcessed, onDeleted }: { doc: InboxDoc; onProc
         <div><label className="label">Date</label><input type="date" className="input" value={f.work_date} onChange={set('work_date')} /></div>
         <div><label className="label">Amount</label><input className="input" value={f.amount} onChange={set('amount')} /></div>
       </div>
-      <div><label className="label">Job</label><select className="input" value={f.job_id} onChange={set('job_id')}><option value="">Select…</option>{jobs?.jobs.map((j) => <option key={j.id} value={j.id}>{j.code} — {j.description}</option>)}</select></div>
+      <div><label className="label">Job</label>
+        <SearchSelect
+          value={f.job_id}
+          onChange={(v) => setF({ ...f, job_id: v })}
+          options={(jobs?.jobs ?? []).map((j: any) => ({ value: j.id, label: j.code, sublabel: j.description }))}
+          placeholder="Select…"
+        />
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <div><label className="label">Vendor</label><input className="input" value={f.vendor} onChange={set('vendor')} /></div>
-        <div><label className="label">Category</label><select className="input" value={f.category} onChange={set('category')}>{EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{EXPENSE_CATEGORY_LABELS[c]}</option>)}</select></div>
+        <div><label className="label">Category</label>
+          <SearchSelect
+            value={f.category}
+            onChange={(v) => setF({ ...f, category: v })}
+            options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: EXPENSE_CATEGORY_LABELS[c] }))}
+          />
+        </div>
       </div>
       <div><label className="label">Reference</label><input className="input" value={f.reference} onChange={set('reference')} placeholder="vendor invoice #" /></div>
       <div><label className="label">Description</label><input className="input" value={f.description} onChange={set('description')} /></div>

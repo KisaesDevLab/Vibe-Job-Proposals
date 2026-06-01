@@ -5,14 +5,16 @@ import { api } from '@/lib/api';
 import { formatMoney } from '@darrow/shared';
 import { PageHeader } from '@/components/Layout';
 import { Modal, Skeleton, Empty, Badge, toast } from '@/components/ui';
+import { SearchSelect } from '@/components/SearchSelect';
 
 interface Level { id: string; name: string; }
-interface Employee { id: string; name: string; levelName: string; levelId: string; active: boolean; current_rate: { costSt: string; costOt: string; costDt: string } | null; }
+interface Employee { id: string; name: string; levelName: string; levelId: string; active: boolean; hireDate: string | null; notes: string | null; current_rate: { costSt: string; costOt: string; costDt: string } | null; }
 
 export function EmployeesPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['employees'], queryFn: () => api.get<Employee[]>('/employees?includeInactive=true') });
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Employee | null>(null);
   const [rateFor, setRateFor] = useState<Employee | null>(null);
   return (
     <div>
@@ -27,12 +29,14 @@ export function EmployeesPage() {
                 const r = e.current_rate;
                 const hasCost = r && (Number(r.costSt) > 0 || Number(r.costOt) > 0 || Number(r.costDt) > 0);
                 return (
-                  <tr key={e.id}>
+                  <tr key={e.id} className="cursor-pointer hover:bg-paper" onClick={() => setEditing(e)}>
                     <td className="td font-medium">{e.name}</td>
                     <td className="td">{e.levelName}</td>
                     <td className="td">{r ? <span className={hasCost ? '' : 'text-red'}>{formatMoney(r.costSt)} / {formatMoney(r.costOt)} / {formatMoney(r.costDt)}</span> : <span className="text-red">no cost rate</span>}</td>
                     <td className="td">{e.active ? <Badge status="finalized">active</Badge> : <Badge status="void">inactive</Badge>}</td>
-                    <td className="td text-right"><button className="btn-ghost" onClick={() => setRateFor(e)}>New rate</button></td>
+                    <td className="td text-right">
+                      <button className="btn-ghost" onClick={(ev) => { ev.stopPropagation(); setRateFor(e); }}>New rate</button>
+                    </td>
                   </tr>
                 );
               })}
@@ -41,8 +45,50 @@ export function EmployeesPage() {
         </div>
       )}
       {creating && <EmployeeForm onClose={() => setCreating(false)} onSaved={() => { qc.invalidateQueries({ queryKey: ['employees'] }); setCreating(false); }} />}
+      {editing && <EmployeeEditForm emp={editing} onClose={() => setEditing(null)} onSaved={() => { qc.invalidateQueries({ queryKey: ['employees'] }); setEditing(null); }} />}
       {rateFor && <RateForm emp={rateFor} onClose={() => setRateFor(null)} onSaved={() => { qc.invalidateQueries({ queryKey: ['employees'] }); setRateFor(null); }} />}
     </div>
+  );
+}
+
+function EmployeeEditForm({ emp, onClose, onSaved }: { emp: Employee; onClose: () => void; onSaved: () => void }) {
+  const { data: levels } = useQuery({ queryKey: ['rate-levels'], queryFn: () => api.get<Level[]>('/rate-levels') });
+  const [f, setF] = useState({
+    name: emp.name,
+    level_id: emp.levelId,
+    active: emp.active,
+    hire_date: emp.hireDate ?? '',
+    notes: emp.notes ?? '',
+  });
+  const m = useMutation({
+    mutationFn: () => api.put(`/employees/${emp.id}`, { ...f, hire_date: f.hire_date || null, notes: f.notes || null }),
+    onSuccess: () => { toast('Employee updated'); onSaved(); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+  return (
+    <Modal open onClose={onClose} title={`Edit Employee — ${emp.name}`}>
+      <div className="space-y-3">
+        <div><label className="label">Name</label><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+        <div><label className="label">Rate level</label>
+          <SearchSelect
+            value={f.level_id}
+            onChange={(v) => setF({ ...f, level_id: v })}
+            options={(levels ?? []).map((l) => ({ value: l.id, label: l.name }))}
+            placeholder="Select…"
+          />
+        </div>
+        <div><label className="label">Hire date</label><input type="date" className="input" value={f.hire_date} onChange={(e) => setF({ ...f, hire_date: e.target.value })} /></div>
+        <div><label className="label">Notes</label><textarea className="input" rows={3} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />
+          <span>{f.active ? 'Active' : 'Inactive'} <span className="text-muted">— inactive employees hidden from new time/expense pickers</span></span>
+        </label>
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={() => m.mutate()} disabled={!f.name || !f.level_id || m.isPending}>Save changes</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -56,10 +102,12 @@ function EmployeeForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
       <div className="space-y-3">
         <div><label className="label">Name</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></div>
         <div><label className="label">Rate level</label>
-          <select className="input" value={levelId} onChange={(e) => setLevelId(e.target.value)}>
-            <option value="">Select…</option>
-            {levels?.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          <SearchSelect
+            value={levelId}
+            onChange={setLevelId}
+            options={(levels ?? []).map((l) => ({ value: l.id, label: l.name }))}
+            placeholder="Select…"
+          />
         </div>
         <div className="flex justify-end gap-2 pt-2"><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" onClick={() => m.mutate()} disabled={!name || !levelId || m.isPending}>Save</button></div>
       </div>

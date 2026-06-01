@@ -13,10 +13,14 @@ import {
   Mail,
   KeyRound,
   Zap,
+  Maximize2,
+  Minimize2,
+  Type,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { usePrefs, setFontScale, setWideMode, type FontScale } from '@/lib/prefs';
 import { UserEmailModal } from './UserEmailModal';
 import { ChangePasswordModal } from './ChangePasswordModal';
 
@@ -43,6 +47,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const [emailOpen, setEmailOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
+  const { fontScale, wideMode } = usePrefs();
 
   async function logout() {
     await api.post('/auth/logout');
@@ -79,6 +84,16 @@ export function Layout({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <div className="border-t border-white/10 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2 px-2">
+            <FontScalePicker value={fontScale} onChange={setFontScale} />
+            <button
+              onClick={() => setWideMode(!wideMode)}
+              title={wideMode ? 'Switch to comfortable width' : 'Switch to full width'}
+              className="rounded p-1.5 text-paper/60 hover:bg-white/10 hover:text-white"
+            >
+              {wideMode ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+          </div>
           <div className="flex items-center gap-2 px-2 py-1.5">
             <div className="grid h-8 w-8 place-items-center rounded-full bg-copper-deep text-xs font-bold text-white">
               {(user?.username ?? '?').slice(0, 2).toUpperCase()}
@@ -102,8 +117,37 @@ export function Layout({ children }: { children: ReactNode }) {
       <UserEmailModal open={emailOpen} onClose={() => setEmailOpen(false)} />
       <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
       <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-7xl px-8 py-8">{children}</div>
+        <div className={`${wideMode ? 'w-full' : 'mx-auto max-w-7xl'} px-8 py-8`}>{children}</div>
       </main>
+    </div>
+  );
+}
+
+function FontScalePicker({ value, onChange }: { value: FontScale; onChange: (s: FontScale) => void }) {
+  const opts: { v: FontScale; label: string; size: number }[] = [
+    { v: 'sm', label: 'A', size: 10 },
+    { v: 'md', label: 'A', size: 13 },
+    { v: 'lg', label: 'A', size: 16 },
+    { v: 'xl', label: 'A', size: 19 },
+  ];
+  return (
+    <div className="flex items-center gap-1 rounded-md bg-white/5 p-0.5" title="Text size">
+      <Type size={12} className="ml-1 text-paper/40" />
+      {opts.map((o) => (
+        <button
+          key={o.v}
+          onClick={() => onChange(o.v)}
+          className={`grid h-6 w-6 place-items-center rounded font-bold leading-none ${
+            value === o.v ? 'bg-copper text-white' : 'text-paper/60 hover:bg-white/10 hover:text-white'
+          }`}
+          style={{ fontSize: o.size }}
+          title={`Text size: ${o.v.toUpperCase()}`}
+          aria-pressed={value === o.v}
+          aria-label={`Text size ${o.v}`}
+        >
+          {o.label}
+        </button>
+      ))}
     </div>
   );
 }

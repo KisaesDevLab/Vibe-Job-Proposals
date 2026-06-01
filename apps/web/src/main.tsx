@@ -10,6 +10,7 @@ import {
   redirect,
 } from '@tanstack/react-router';
 import './index.css';
+import './lib/prefs'; // apply saved font-size + wide-mode before first paint
 import { AuthProvider } from './lib/auth';
 import { api } from './lib/api';
 import { Layout } from './components/Layout';

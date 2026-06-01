@@ -12,6 +12,7 @@
   "dependencies": {
     "@darrow/db": "*",
     "@darrow/shared": "*",
+    "@react-pdf/renderer": "^4.5.1",
     "bullmq": "^5.8.2",
     "docxtemplater": "^3.47.3",
     "ioredis": "^5.4.1",

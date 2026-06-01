@@ -135,6 +135,7 @@ export interface InvoiceTotals {
   total_stock_material: number;
   total_markup: number;
   total_expense_cost: number;
+  total_overhead: number;
   grand_total: number;
 }
 
@@ -169,6 +170,7 @@ export function computeInvoiceTotals(
     total_stock_material: 0,
     total_markup: 0,
     total_expense_cost: 0,
+    total_overhead: 0,
     grand_total: 0,
   };
 

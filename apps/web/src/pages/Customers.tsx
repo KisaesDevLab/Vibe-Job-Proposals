@@ -5,8 +5,11 @@ import { api } from '@/lib/api';
 import { formatPercent, formatMoney, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '@darrow/shared';
 import { PageHeader } from '@/components/Layout';
 import { Modal, Skeleton, Empty, Badge, toast } from '@/components/ui';
+import { SearchSelect } from '@/components/SearchSelect';
 
-interface Customer { id: string; name: string; billToCity: string; active: boolean; job_count: number; markups: Record<string, number>; }
+interface Customer { id: string; name: string; billToCity: string; active: boolean; job_count: number; markups: Record<string, number>; overhead?: OverheadConfig; }
+interface OverheadConfig { employee_id: string | null; hourly_rate: number | null; percent: number | null; }
+interface Employee { id: string; name: string; active: boolean; }
 
 export function CustomersPage() {
   const qc = useQueryClient();
@@ -75,15 +78,18 @@ function CustomerForm({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 }
 
 function CustomerDrawer({ customer, onClose, onChanged }: { customer: Customer; onClose: () => void; onChanged: () => void }) {
-  const [tab, setTab] = useState<'profile' | 'markups' | 'schedules'>('profile');
+  const [tab, setTab] = useState<'profile' | 'markups' | 'schedules' | 'overhead'>('profile');
   return (
     <Modal open onClose={onClose} title={customer.name} wide>
       <div className="mb-4 flex gap-2 border-b border-line">
-        {(['profile', 'schedules', 'markups'] as const).map((t) => (
+        {(['profile', 'schedules', 'markups', 'overhead'] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm font-medium capitalize ${tab === t ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>{t}</button>
         ))}
       </div>
-      {tab === 'profile' ? <ProfileTab customer={customer} onChanged={onChanged} /> : tab === 'markups' ? <MarkupsTab customer={customer} onChanged={onChanged} /> : <SchedulesTab customer={customer} />}
+      {tab === 'profile' ? <ProfileTab customer={customer} onChanged={onChanged} />
+        : tab === 'markups' ? <MarkupsTab customer={customer} onChanged={onChanged} />
+        : tab === 'overhead' ? <OverheadTab customer={customer} onChanged={onChanged} />
+        : <SchedulesTab customer={customer} />}
     </Modal>
   );
 }
@@ -144,6 +150,65 @@ function MarkupsTab({ customer, onChanged }: { customer: Customer; onChanged: ()
         </div>
       ))}
       <button className="btn-primary mt-3" onClick={() => m.mutate()} disabled={m.isPending}>Save markups</button>
+    </div>
+  );
+}
+
+function OverheadTab({ customer, onChanged }: { customer: Customer; onChanged: () => void }) {
+  const qc = useQueryClient();
+  const { data: emps } = useQuery({ queryKey: ['employees'], queryFn: () => api.get<Employee[]>('/employees') });
+  const { data: detail } = useQuery({ queryKey: ['customer', customer.id], queryFn: () => api.get<any>(`/customers/${customer.id}`) });
+  const initial: { employee_id: string; hourly_rate: string; percent: string } = {
+    employee_id: detail?.overhead?.employee_id ?? customer.overhead?.employee_id ?? '',
+    hourly_rate: (detail?.overhead?.hourly_rate ?? customer.overhead?.hourly_rate) != null
+      ? String(detail?.overhead?.hourly_rate ?? customer.overhead?.hourly_rate)
+      : '',
+    percent: (detail?.overhead?.percent ?? customer.overhead?.percent) != null
+      ? String(Number(detail?.overhead?.percent ?? customer.overhead?.percent) * 100)
+      : '',
+  };
+  const [f, setF] = useState(initial);
+  const [seeded, setSeeded] = useState(false);
+  if (detail && !seeded) { setF(initial); setSeeded(true); }
+  const save = useMutation({
+    mutationFn: () => api.put(`/customers/${customer.id}/overhead`, {
+      employee_id: f.employee_id || null,
+      hourly_rate: f.hourly_rate ? Number(f.hourly_rate) : null,
+      percent: f.percent ? Number(f.percent) / 100 : null,
+    }),
+    onSuccess: () => { toast('Overhead saved'); qc.invalidateQueries({ queryKey: ['customer', customer.id] }); onChanged(); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+  const clear = useMutation({
+    mutationFn: () => api.put(`/customers/${customer.id}/overhead`, { employee_id: null, hourly_rate: null, percent: null }),
+    onSuccess: () => { toast('Overhead cleared'); setF({ employee_id: '', hourly_rate: '', percent: '' }); qc.invalidateQueries({ queryKey: ['customer', customer.id] }); onChanged(); },
+  });
+  const employeeOptions = (emps ?? []).filter((e) => e.active || e.id === f.employee_id).map((e) => ({ value: e.id, label: e.name }));
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted">
+        Adds an owner/overhead line on every invoice for this customer.
+        Amount = (sum of other employees' labor $) × percent. Hours shown = amount ÷ hourly rate.
+        Leave any field blank to disable.
+      </p>
+      <div>
+        <label className="label">Overhead employee</label>
+        <SearchSelect value={f.employee_id} onChange={(v) => setF({ ...f, employee_id: v })} options={employeeOptions} placeholder="Select…" allowClear />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="label">Hourly rate ($)</label>
+          <input className="input" inputMode="decimal" value={f.hourly_rate} onChange={(e) => setF({ ...f, hourly_rate: e.target.value.replace(/[^0-9.]/g, '') })} placeholder="75.00" />
+        </div>
+        <div>
+          <label className="label">Percent of crew labor (%)</label>
+          <input className="input" inputMode="decimal" value={f.percent} onChange={(e) => setF({ ...f, percent: e.target.value.replace(/[^0-9.]/g, '') })} placeholder="5" />
+        </div>
+      </div>
+      <div className="flex gap-2 pt-2">
+        <button className="btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>Save overhead</button>
+        <button className="btn-ghost" onClick={() => clear.mutate()} disabled={clear.isPending}>Clear</button>
+      </div>
     </div>
   );
 }

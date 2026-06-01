@@ -5,6 +5,7 @@
 import ExcelJS from 'exceljs';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   sql,
   parseJobCode,
@@ -292,7 +293,7 @@ function renderReport(report: Report): string {
   return lines.join('\n') + '\n';
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   const path = args.find((a) => !a.startsWith('--'));
   const dryRun = args.includes('--dry-run');

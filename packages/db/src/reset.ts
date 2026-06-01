@@ -1,4 +1,5 @@
 // Drop + migrate + seed. Guarded to development only (CLAUDE.md Phase 20).
+import { pathToFileURL } from 'node:url';
 import postgres from 'postgres';
 import { runMigrations } from './migrate.js';
 import { seed } from './seed.js';
@@ -18,7 +19,7 @@ async function reset(): Promise<void> {
   await seed();
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   reset().then(
     () => process.exit(0),
     (err) => {

@@ -1,5 +1,6 @@
 // Idempotent application seed (beyond the seeds baked into migrations).
 // Seeds the 9 historical customers (Phase 6 task 25) with empty addresses.
+import { pathToFileURL } from 'node:url';
 import { db, sql } from './client.js';
 import { customers } from './schema.js';
 
@@ -23,7 +24,7 @@ export async function seed(): Promise<void> {
   console.log(`[seed] ensured ${SEED_CUSTOMERS.length} customers`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   seed()
     .then(() => sql.end({ timeout: 5 }))
     .then(() => process.exit(0))

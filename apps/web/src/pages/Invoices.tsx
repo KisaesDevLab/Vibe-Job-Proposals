@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { formatMoney } from '@darrow/shared';
 import { PageHeader } from '@/components/Layout';
 import { Modal, Skeleton, Empty, Badge, toast } from '@/components/ui';
+import { SearchSelect } from '@/components/SearchSelect';
 
 interface Invoice { id: string; billed_reference: string | null; status: string; job_code: string; customer_name: string; grand_total: string | null; through_date: string; imported_from_xlsm: boolean; }
 
@@ -107,10 +108,14 @@ function BillableByRange() {
         <div><label className="label">From</label><input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
         <div><label className="label">To</label><input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} /></div>
         <div><label className="label">Customer</label>
-          <select className="input max-w-xs" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-            <option value="">All customers</option>
-            {customers?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <SearchSelect
+            className="max-w-xs"
+            value={customerId}
+            onChange={setCustomerId}
+            options={(customers ?? []).map((c) => ({ value: c.id, label: c.name }))}
+            placeholder="All customers"
+            allowClear
+          />
         </div>
         <a className="btn-ghost" href={`/api/reports/job-totals?from=${from}&to=${to}${customerId ? `&customer_id=${customerId}` : ''}&format=csv`}><Download size={15} /> CSV</a>
       </div>
@@ -174,7 +179,14 @@ function NewDraft({ onClose, onCreated }: { onClose: () => void; onCreated: (id:
   return (
     <Modal open onClose={onClose} title="New Invoice Draft">
       <div className="space-y-3">
-        <div><label className="label">Job</label><select className="input" value={job_id} onChange={(e) => setJob(e.target.value)}><option value="">Select…</option>{jobs?.jobs.map((j) => <option key={j.id} value={j.id}>{j.code} — {j.description}</option>)}</select></div>
+        <div><label className="label">Job</label>
+          <SearchSelect
+            value={job_id}
+            onChange={setJob}
+            options={(jobs?.jobs ?? []).map((j: any) => ({ value: j.id, label: j.code, sublabel: j.description }))}
+            placeholder="Select…"
+          />
+        </div>
         <div><label className="label">Through date</label><input type="date" className="input" value={through_date} onChange={(e) => setThrough(e.target.value)} /></div>
         <p className="text-xs text-muted">All unbilled time &amp; expenses on/before this date will be auto-selected.</p>
         <div className="flex justify-end gap-2 pt-2"><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" onClick={() => m.mutate()} disabled={!job_id || m.isPending}>Create draft</button></div>

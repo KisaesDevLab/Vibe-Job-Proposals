@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { ArrowLeft, Download, FileText, Ban, RefreshCw, Mail } from 'lucide-react';
+import { ArrowLeft, Download, FileText, Ban, RefreshCw, Mail, Package } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatMoney } from '@darrow/shared';
 import { Skeleton, Badge, Modal, toast } from '@/components/ui';
@@ -14,7 +14,7 @@ export function InvoiceDetailPage({ id }: { id: string }) {
     queryFn: () => api.get<any>(`/invoices/${id}`),
     refetchInterval: (q) => {
       const inv = q.state.data?.invoice;
-      return inv && (inv.docx_status === 'pending' || inv.pdf_status === 'pending') ? 3000 : false;
+      return inv && (inv.docx_status === 'pending' || inv.pdf_status === 'pending' || inv.package_status === 'pending') ? 3000 : false;
     },
   });
   const [voiding, setVoiding] = useState(false);
@@ -47,6 +47,13 @@ export function InvoiceDetailPage({ id }: { id: string }) {
             <>
               <a className="btn-ghost" href={`/api/invoices/${id}/docx`}><FileText size={15} /> DOCX</a>
               <a className="btn-ghost" href={`/api/invoices/${id}/pdf`}><Download size={15} /> PDF</a>
+              <a
+                className={`btn-primary ${inv.package_status !== 'ready' ? 'pointer-events-none opacity-50' : ''}`}
+                href={`/api/invoices/${id}/package`}
+                title={inv.package_status === 'ready' ? 'Download full package (proposal + summaries + receipts)' : `Package ${inv.package_status ?? 'pending'}`}
+              >
+                <Package size={15} /> Package PDF
+              </a>
               <button className="btn-ghost" onClick={() => setEmailing(true)}><Mail size={15} /> Email</button>
               <button className="btn-ghost" onClick={() => api.post(`/invoices/${id}/regenerate`).then(() => { toast('Regenerating'); qc.invalidateQueries({ queryKey: ['invoice', id] }); })}><RefreshCw size={15} /></button>
               <button className="btn-danger" onClick={() => setVoiding(true)}><Ban size={15} /> Void</button>
@@ -171,7 +178,9 @@ function SnapshotView({ inv, lines }: { inv: any; lines: any[] }) {
         <div className="space-y-1 text-sm">
           <div className="flex justify-between"><span className="text-muted">DOCX</span><Badge status={inv.docx_status ?? 'pending'}>{inv.docx_status ?? '—'}</Badge></div>
           <div className="flex justify-between"><span className="text-muted">PDF</span><Badge status={inv.pdf_status ?? 'pending'}>{inv.pdf_status ?? '—'}</Badge></div>
+          <div className="flex justify-between"><span className="text-muted">Package</span><Badge status={inv.package_status ?? 'pending'}>{inv.package_status ?? '—'}</Badge></div>
           {inv.generation_error && <div className="rounded bg-red-soft p-2 text-xs text-red">{inv.generation_error}</div>}
+          {inv.package_error && <div className="rounded bg-red-soft p-2 text-xs text-red">Package: {inv.package_error}</div>}
         </div>
         <div className="mt-4 mb-2 text-sm font-semibold">Totals</div>
         <Totals t={{ total_labor: inv.total_labor, total_markup: inv.total_markup, grand_total: inv.grand_total }} />

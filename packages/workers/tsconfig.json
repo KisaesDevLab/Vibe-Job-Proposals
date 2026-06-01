@@ -4,6 +4,7 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "types": ["node"],
+    "jsx": "react-jsx",
     "paths": {
       "@darrow/shared": ["../shared/src/index.ts"],
       "@darrow/db": ["../db/src/index.ts"]

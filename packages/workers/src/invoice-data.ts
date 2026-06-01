@@ -32,7 +32,7 @@ export async function buildInvoiceData(invoiceId: string): Promise<Record<string
   const expById = new Map(expRows.map((e) => [e.id, e]));
 
   const laborLines = lines
-    .filter((l) => l.line_type === 'labor')
+    .filter((l) => l.line_type === 'labor' || l.line_type === 'overhead')
     .map((l) => ({
       employee_name: empName.get(l.employee_id) ?? l.description.split(' – ')[0],
       tier_label: TIER_LABELS[(l.tier ?? 'st') as keyof typeof TIER_LABELS],

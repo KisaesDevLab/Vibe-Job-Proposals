@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { ok, fail, customerSchema, markupMapSchema } from '@darrow/shared';
+import { ok, fail, customerSchema, markupMapSchema, customerOverheadSchema } from '@darrow/shared';
 import { db, customers, customerMarkupDefaults, jobs } from '@darrow/db';
 import { eq, and, asc, sql } from 'drizzle-orm';
 import { ah, HttpError } from '../error-handler.js';
@@ -11,6 +11,14 @@ export const customersRouter = Router();
 async function markupMap(customerId: string) {
   const rows = await db.select().from(customerMarkupDefaults).where(eq(customerMarkupDefaults.customerId, customerId));
   return Object.fromEntries(rows.map((r) => [r.category, Number(r.percent)]));
+}
+
+function overheadOf(row: typeof customers.$inferSelect) {
+  return {
+    employee_id: row.overheadEmployeeId,
+    hourly_rate: row.overheadHourlyRate != null ? Number(row.overheadHourlyRate) : null,
+    percent: row.overheadPercent != null ? Number(row.overheadPercent) : null,
+  };
 }
 
 function csvEscape(v: unknown): string {
@@ -49,7 +57,7 @@ customersRouter.get(
     const data = [];
     for (const r of rows) {
       if (!includeInactive && !r.active) continue;
-      data.push({ ...r, markups: await markupMap(r.id), job_count: cmap.get(r.id) ?? 0 });
+      data.push({ ...r, markups: await markupMap(r.id), overhead: overheadOf(r), job_count: cmap.get(r.id) ?? 0 });
     }
     res.json(ok(data));
   }),
@@ -60,7 +68,7 @@ customersRouter.get(
   ah(async (req, res) => {
     const [row] = await db.select().from(customers).where(eq(customers.id, req.params.id));
     if (!row) throw new HttpError(404, 'not_found', 'Customer not found');
-    res.json(ok({ ...row, markups: await markupMap(row.id) }));
+    res.json(ok({ ...row, markups: await markupMap(row.id), overhead: overheadOf(row) }));
   }),
 );
 
@@ -132,6 +140,25 @@ customersRouter.put(
       }
     });
     res.json(ok(await markupMap(req.params.id)));
+  }),
+);
+
+customersRouter.put(
+  '/:id/overhead',
+  ah(async (req: AuthedRequest, res) => {
+    const body = customerOverheadSchema.parse(req.body);
+    const [row] = await db
+      .update(customers)
+      .set({
+        overheadEmployeeId: body.employee_id,
+        overheadHourlyRate: body.hourly_rate != null ? String(body.hourly_rate) : null,
+        overheadPercent: body.percent != null ? String(body.percent) : null,
+      })
+      .where(eq(customers.id, req.params.id))
+      .returning();
+    if (!row) throw new HttpError(404, 'not_found', 'Customer not found');
+    await writeAudit({ userId: req.user?.id, entityType: 'customer', entityId: row.id, action: 'update', summary: `Updated overhead for ${row.name}` });
+    res.json(ok(overheadOf(row)));
   }),
 );
 
