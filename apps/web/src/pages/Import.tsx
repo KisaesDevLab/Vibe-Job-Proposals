@@ -15,6 +15,7 @@ interface PreviewResult { type: string; sheet_name: string; total_rows: number; 
 const COL_ORDER: Record<string, string[]> = {
   expenses: ['work_date', 'vendor', 'reference', 'category', 'job_code', 'amount', 'description'],
   customers: ['name', 'bill_to_address1', 'bill_to_city', 'bill_to_state', 'bill_to_zip', 'contact_name', 'contact_email', 'contact_phone'],
+  'time-entries': ['work_date', 'employee', 'job_code', 'st_hours', 'ot_hours', 'dt_hours'],
 };
 
 export function ImportPage() {

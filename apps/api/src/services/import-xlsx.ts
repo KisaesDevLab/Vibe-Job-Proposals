@@ -15,7 +15,7 @@ import { sql } from '@darrow/db';
 import { EXPENSE_CATEGORIES, type ExpenseCategory } from '@darrow/shared';
 import { writeAudit } from '../audit.js';
 
-export type ImportType = 'expenses' | 'customers';
+export type ImportType = 'expenses' | 'customers' | 'time-entries';
 
 export interface PreviewError { row: number; field?: string; message: string; }
 export interface PreviewResult<TRow = any> {
@@ -300,12 +300,198 @@ async function commitCustomers(rows: Array<CustomerRow & { _row: number }>, user
   return { inserted, updated, skipped };
 }
 
+// ─── Importer: Time entries ────────────────────────────────────────────────
+//
+// Accepts two row shapes; the parser detects which by sniffing the headers.
+//
+//   Per-day (one row = one date):
+//     Date | Employee | Job Code | ST | OT | DT
+//
+//   Weekly grid (legacy Time Recap shape — one row = one (employee, job, week)):
+//     Week Of | Employee | Job Code | Mon ST | Mon OT | Mon DT | ... | Sun DT
+//     "Week Of" must be a Monday (we reject other DOWs with a clear error).
+//
+// In both shapes we upsert by (employee_id, job_id, work_date) since
+// time_entries has that unique constraint. A row with all-zero hours is
+// skipped (matches the no-all-zero rule the API enforces).
+
+interface TimeEntryRow {
+  work_date: string;
+  employee: string;
+  job_code: string;
+  st_hours: number;
+  ot_hours: number;
+  dt_hours: number;
+}
+
+function isWeeklyShape(headers: string[]): boolean {
+  // Any day-prefixed column triggers weekly parsing.
+  return headers.some((h) => /^(mon|tue|tues|wed|wednesday|thu|thur|thursday|fri|sat|sun)/.test(h));
+}
+
+// Maps normalized headers like "mon_st", "mon_1x", "monday_st" to (dow, tier).
+function dayTierFromHeader(h: string): { dow: number; tier: 'st' | 'ot' | 'dt' } | null {
+  const m = h.match(/^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)[_\s-]*(st|ot|dt|1x|15x|2x|straight|over|double)/);
+  if (!m) return null;
+  const dowMap: Record<string, number> = {
+    mon: 0, monday: 0,
+    tue: 1, tues: 1, tuesday: 1,
+    wed: 2, wednesday: 2,
+    thu: 3, thur: 3, thurs: 3, thursday: 3,
+    fri: 4, friday: 4,
+    sat: 5, saturday: 5,
+    sun: 6, sunday: 6,
+  };
+  const tierMap: Record<string, 'st' | 'ot' | 'dt'> = {
+    st: 'st', '1x': 'st', straight: 'st',
+    ot: 'ot', '15x': 'ot', over: 'ot',
+    dt: 'dt', '2x': 'dt', double: 'dt',
+  };
+  const dow = dowMap[m[1]];
+  const tier = tierMap[m[2]];
+  if (dow === undefined || !tier) return null;
+  return { dow, tier };
+}
+
+function dowOf(yyyymmdd: string): number {
+  // Monday=0 .. Sunday=6 (matches the rest of the app).
+  const d = new Date(yyyymmdd + 'T00:00:00Z');
+  return (d.getUTCDay() + 6) % 7;
+}
+
+function addDays(yyyymmdd: string, n: number): string {
+  const d = new Date(yyyymmdd + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+async function previewTimeEntries(buffer: Buffer): Promise<PreviewResult<TimeEntryRow>> {
+  const sheet = await readFirstNonEmptySheet(buffer);
+  const rows: Array<TimeEntryRow & { _row: number; _errors?: string[] }> = [];
+  const errors: PreviewError[] = [];
+
+  // Resolve names + codes up front.
+  const employees = await sql<{ id: string; name: string; active: boolean }[]>`SELECT id, name, active FROM employees`;
+  const empByName = new Map(employees.map((e) => [e.name.toLowerCase(), e]));
+  const jobs = await sql<{ id: string; code: string; active: boolean }[]>`SELECT id, code, active FROM jobs`;
+  const jobByCode = new Map(jobs.map((j) => [j.code.toLowerCase(), j]));
+
+  const weekly = isWeeklyShape(sheet.headers);
+  const dayTierCols: Array<{ key: string; dow: number; tier: 'st' | 'ot' | 'dt' }> = weekly
+    ? sheet.headers.flatMap((h) => {
+        const dt = dayTierFromHeader(h);
+        return dt ? [{ key: h, ...dt }] : [];
+      })
+    : [];
+
+  function pushOne(rowNum: number, work_date: string, employee: string, job_code: string, st: number, ot: number, dt: number, extraErrors: string[]) {
+    const rowErrors: string[] = [...extraErrors];
+    if (!work_date) rowErrors.push('Date missing or unparseable');
+    if (!employee) rowErrors.push('Employee required');
+    else if (!empByName.has(employee.toLowerCase())) rowErrors.push(`Employee "${employee}" not found`);
+    else if (!empByName.get(employee.toLowerCase())!.active) rowErrors.push(`Employee "${employee}" is inactive`);
+    if (!job_code) rowErrors.push('Job code required');
+    else if (!jobByCode.has(job_code.toLowerCase())) rowErrors.push(`Job "${job_code}" not found`);
+    else if (!jobByCode.get(job_code.toLowerCase())!.active) rowErrors.push(`Job "${job_code}" is inactive`);
+    if (st < 0 || ot < 0 || dt < 0) rowErrors.push('Hours must be non-negative');
+    if (st > 24 || ot > 24 || dt > 24) rowErrors.push('Hours exceed 24/day cap');
+    if (st + ot + dt === 0) rowErrors.push('All hours are zero — skipping');
+    rows.push({
+      _row: rowNum, work_date, employee, job_code,
+      st_hours: st, ot_hours: ot, dt_hours: dt,
+      _errors: rowErrors.length ? rowErrors : undefined,
+    });
+    for (const m of rowErrors) errors.push({ row: rowNum, message: m });
+  }
+
+  for (const r of sheet.rows) {
+    const rowNum = r._row as number;
+    const employee = toStr(r.employee ?? r.employee_name ?? r.name);
+    const job_code = toStr(r.job ?? r.job_code ?? r.jobcode);
+
+    if (weekly) {
+      const weekOfStr = toDateStr(r.week_of ?? r.date ?? r.week ?? r.monday);
+      const weekErrors: string[] = [];
+      let anchorDow = -1;
+      if (weekOfStr) {
+        anchorDow = dowOf(weekOfStr);
+        if (anchorDow !== 0) weekErrors.push(`Week Of must be a Monday (got ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][anchorDow]})`);
+      } else {
+        weekErrors.push('Week Of date missing or unparseable');
+      }
+      // Collect day-tier values per (dow): {st, ot, dt}
+      const days: Record<number, { st: number; ot: number; dt: number }> = {};
+      for (const col of dayTierCols) {
+        const v = toNum(r[col.key]) ?? 0;
+        const d = (days[col.dow] ??= { st: 0, ot: 0, dt: 0 });
+        d[col.tier] = v;
+      }
+      // Emit one row per day with any non-zero hours (or every day with zero
+      // gets the "all hours zero" error if the entire week is empty).
+      let anyEmitted = false;
+      if (weekOfStr && anchorDow === 0) {
+        for (let dow = 0; dow < 7; dow++) {
+          const d = days[dow] ?? { st: 0, ot: 0, dt: 0 };
+          if (d.st === 0 && d.ot === 0 && d.dt === 0) continue;
+          anyEmitted = true;
+          pushOne(rowNum, addDays(weekOfStr, dow), employee, job_code, d.st, d.ot, d.dt, []);
+        }
+      }
+      if (!anyEmitted) {
+        // Always emit one row to surface errors even if the week is blank/invalid.
+        pushOne(rowNum, weekOfStr ?? '', employee, job_code, 0, 0, 0, weekErrors.length ? weekErrors : ['All hours are zero — skipping']);
+      }
+    } else {
+      const work_date = toDateStr(r.date ?? r.work_date ?? r.workdate) ?? '';
+      const st = toNum(r.st ?? r.st_hours ?? r.straight ?? r['1x']) ?? 0;
+      const ot = toNum(r.ot ?? r.ot_hours ?? r.over ?? r['15x']) ?? 0;
+      const dt = toNum(r.dt ?? r.dt_hours ?? r.double ?? r['2x']) ?? 0;
+      pushOne(rowNum, work_date, employee, job_code, st, ot, dt, []);
+    }
+  }
+  return { type: 'time-entries', sheet_name: sheet.sheetName + (weekly ? ' (weekly grid)' : ' (per-day)'), total_rows: rows.length, rows, errors };
+}
+
+async function commitTimeEntries(rows: Array<TimeEntryRow & { _row: number }>, userId: string | null): Promise<CommitResult> {
+  const employees = await sql<{ id: string; name: string }[]>`SELECT id, name FROM employees`;
+  const empByName = new Map(employees.map((e) => [e.name.toLowerCase(), e.id]));
+  const jobs = await sql<{ id: string; code: string }[]>`SELECT id, code FROM jobs`;
+  const jobByCode = new Map(jobs.map((j) => [j.code.toLowerCase(), j.id]));
+
+  let inserted = 0, updated = 0, skipped = 0;
+  for (const r of rows) {
+    const empId = empByName.get(r.employee.toLowerCase());
+    const jobId = jobByCode.get(r.job_code.toLowerCase());
+    if (!empId || !jobId || !r.work_date) { skipped++; continue; }
+    if (r.st_hours === 0 && r.ot_hours === 0 && r.dt_hours === 0) { skipped++; continue; }
+    // Upsert by (employee, job, date). Importing a row for a (e,j,d) that's
+    // already bound to an invoice would corrupt the snapshot — refuse to
+    // overwrite billed rows.
+    const [existing] = await sql<{ id: string; invoice_id: string | null }[]>`
+      SELECT id, invoice_id FROM time_entries WHERE employee_id = ${empId} AND job_id = ${jobId} AND work_date = ${r.work_date}::date`;
+    if (existing) {
+      if (existing.invoice_id) { skipped++; continue; }
+      await sql`UPDATE time_entries SET st_hours = ${r.st_hours}, ot_hours = ${r.ot_hours}, dt_hours = ${r.dt_hours} WHERE id = ${existing.id}`;
+      updated++;
+    } else {
+      await sql`INSERT INTO time_entries (employee_id, job_id, work_date, st_hours, ot_hours, dt_hours)
+        VALUES (${empId}, ${jobId}, ${r.work_date}::date, ${r.st_hours}, ${r.ot_hours}, ${r.dt_hours})`;
+      inserted++;
+    }
+  }
+  if (inserted + updated > 0) {
+    await writeAudit({ userId, entityType: 'time_entry', entityId: 'bulk', action: 'import', summary: `Imported time entries from xlsx: ${inserted} new, ${updated} updated, ${skipped} skipped` });
+  }
+  return { inserted, updated, skipped };
+}
+
 // ─── Dispatch ──────────────────────────────────────────────────────────────
 
 export async function previewImport(type: ImportType, buffer: Buffer): Promise<PreviewResult> {
   switch (type) {
     case 'expenses': return previewExpenses(buffer);
     case 'customers': return previewCustomers(buffer);
+    case 'time-entries': return previewTimeEntries(buffer);
     default: throw new Error(`Unknown import type: ${type}`);
   }
 }
@@ -314,6 +500,7 @@ export async function commitImport(type: ImportType, rows: any[], userId: string
   switch (type) {
     case 'expenses': return commitExpenses(rows, userId);
     case 'customers': return commitCustomers(rows, userId);
+    case 'time-entries': return commitTimeEntries(rows, userId);
     default: throw new Error(`Unknown import type: ${type}`);
   }
 }
@@ -328,5 +515,13 @@ export const IMPORTER_TYPES: { value: ImportType; label: string; columns: string
     value: 'customers',
     label: 'Customers',
     columns: ['Name', 'Address1', 'Address2', 'City', 'State', 'Zip', 'Contact Name', 'Email', 'Phone'],
+  },
+  {
+    value: 'time-entries',
+    label: 'Time Entries',
+    columns: [
+      'Per-day shape: Date | Employee | Job Code | ST | OT | DT',
+      'Weekly shape: Week Of (Monday) | Employee | Job Code | Mon ST | Mon OT | Mon DT | … | Sun DT',
+    ],
   },
 ];
