@@ -37,13 +37,22 @@ export const markupMapSchema = z.array(
   z.object({ category: categoryEnum, percent }),
 );
 
-// Per-customer overhead config. Any field nullable to clear that piece; line
-// is only emitted by the invoice service when all three are set and percent > 0.
+// Per-customer overhead config. Either ALL three fields are set (with a
+// positive rate and percent) to enable, or ALL three are null to disable.
+// Partial configs would persist silently and be ignored by buildPreview,
+// which is confusing — reject them.
 export const customerOverheadSchema = z.object({
   employee_id: z.string().uuid().nullable(),
   hourly_rate: z.coerce.number().nonnegative().nullable(),
   percent: z.coerce.number().min(0).max(1).nullable(),
-});
+}).refine(
+  (v) => {
+    const allNull = v.employee_id == null && v.hourly_rate == null && v.percent == null;
+    const allSet = v.employee_id != null && v.hourly_rate != null && v.hourly_rate > 0 && v.percent != null && v.percent > 0;
+    return allNull || allSet;
+  },
+  { message: 'Overhead requires employee_id, hourly_rate (>0), and percent (>0) all set, or all cleared' },
+);
 
 export const rateLevelSchema = z.object({
   name: z.string().min(1).max(100),
@@ -64,6 +73,11 @@ export const costRateSchema = z.object({
   cost_st: money,
   cost_ot: money,
   cost_dt: money,
+});
+
+export const employeeLevelSchema = z.object({
+  effective_from: dateStr,
+  level_id: z.string().uuid(),
 });
 
 export const customerSchema = z.object({
@@ -160,4 +174,30 @@ export const emailSchema = z.object({
   body: z.string().min(1),
   include_docx: z.boolean().default(true),
   include_pdf: z.boolean().default(true),
+});
+
+// Summary invoices — bundle N finalized child invoices into one customer-
+// facing PDF with its own AR-trackable number.
+export const summaryDraftSchema = z.object({
+  customer_id: z.string().uuid(),
+  member_invoice_ids: z.array(z.string().uuid()).min(1),
+  billed_reference: z.string().min(1).max(80).optional(),
+  description: z.string().max(2000).optional(),
+  po_number: z.string().max(80).nullable().optional(),
+  location_of_service: z.string().max(200).nullable().optional(),
+  work_start_date: dateStr.nullable().optional(),
+  work_end_date: dateStr.nullable().optional(),
+});
+
+export const summaryUpdateSchema = z.object({
+  billed_reference: z.string().min(1).max(80).optional(),
+  description: z.string().max(2000).optional(),
+  po_number: z.string().max(80).nullable().optional(),
+  location_of_service: z.string().max(200).nullable().optional(),
+  work_start_date: dateStr.nullable().optional(),
+  work_end_date: dateStr.nullable().optional(),
+});
+
+export const summaryMembersSchema = z.object({
+  invoice_ids: z.array(z.string().uuid()).min(1),
 });

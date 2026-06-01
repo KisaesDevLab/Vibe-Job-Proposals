@@ -39,6 +39,9 @@ export async function buildInvoiceData(invoiceId: string): Promise<Record<string
       hours: Number(l.quantity),
       rate: formatMoney(l.unit_rate),
       amount: formatMoney(l.amount),
+      // Renderer keys aggregation on this so a worker who is also the
+      // overhead employee on the same invoice doesn't merge into one row.
+      is_overhead: l.line_type === 'overhead',
     }));
 
   const expenseFlat = lines

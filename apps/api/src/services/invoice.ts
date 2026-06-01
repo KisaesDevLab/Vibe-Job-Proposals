@@ -12,13 +12,12 @@ import {
   type PricedExpense,
   type Tier,
 } from '@darrow/shared';
-import { getRateAt, getCostRateAt, getMarkupPercent } from './lookup.js';
+import { getRateAt, getCostRateAt, getLevelAt, getMarkupPercent } from './lookup.js';
 
 interface BoundTime {
   id: string;
   employee_id: string;
   employee_name: string;
-  level_id: string;
   work_date: string;
   st_hours: number;
   ot_hours: number;
@@ -76,7 +75,7 @@ async function loadInvoiceContext(invoiceId: string) {
     SELECT i.*, j.customer_id, j.code AS job_code FROM invoices i JOIN jobs j ON j.id = i.job_id WHERE i.id = ${invoiceId}`;
   if (!inv) return null;
   const time = await rawsql<BoundTime[]>`
-    SELECT te.id, te.employee_id, e.name AS employee_name, e.level_id,
+    SELECT te.id, te.employee_id, e.name AS employee_name,
            te.work_date::text AS work_date, te.st_hours, te.ot_hours, te.dt_hours
     FROM time_entries te JOIN employees e ON e.id = te.employee_id
     WHERE te.invoice_id = ${invoiceId} ORDER BY te.work_date, e.name`;
@@ -98,7 +97,14 @@ export async function buildPreview(invoiceId: string): Promise<InvoicePreview | 
   const pricedTime: PricedTimeEntry[] = [];
 
   for (const t of time) {
-    const rate = await getRateAt(customerId, t.level_id, t.work_date);
+    // Level is effective-dated history (post-0018) so past entries keep their
+    // original level even after a promotion.
+    const level = await getLevelAt(t.employee_id, t.work_date);
+    if ('error' in level) {
+      blockers.push({ kind: level.error, message: `${t.employee_name} (${t.work_date}): ${level.detail}`, entity_id: t.id });
+      continue;
+    }
+    const rate = await getRateAt(customerId, level.level_id, t.work_date);
     const cost = await getCostRateAt(t.employee_id, t.work_date);
     if ('error' in rate) {
       blockers.push({ kind: rate.error, message: `${t.employee_name} (${t.work_date}): ${rate.detail}`, entity_id: t.id });
@@ -173,8 +179,13 @@ export async function buildPreview(invoiceId: string): Promise<InvoicePreview | 
   const ohRate = customer?.overhead_hourly_rate != null ? Number(customer.overhead_hourly_rate) : null;
   const ohPct = customer?.overhead_percent != null ? Number(customer.overhead_percent) : null;
   if (ohEmp && ohRate && ohRate > 0 && ohPct && ohPct > 0 && totals.total_labor > 0) {
-    const [empRow] = await rawsql<any[]>`SELECT name FROM employees WHERE id = ${ohEmp}`;
-    if (empRow) {
+    // Skip the overhead line if the configured employee is inactive — billing
+    // a deactivated owner/foreman would be misleading. Surface a soft blocker
+    // so admin notices and either reactivates or clears the customer config.
+    const [empRow] = await rawsql<any[]>`SELECT name, active FROM employees WHERE id = ${ohEmp}`;
+    if (empRow && !empRow.active) {
+      blockers.push({ kind: 'overhead_employee_inactive', message: `Overhead employee ${empRow.name} is inactive — reactivate or clear the customer's overhead config` });
+    } else if (empRow) {
       const overheadAmount = Math.round(totals.total_labor * ohPct * 100) / 100;
       const overheadHours = Math.round((overheadAmount / ohRate) * 100) / 100;
       laborLines.push({
@@ -214,11 +225,16 @@ export async function finalizeInvoice(invoiceId: string, userId: string | null):
   }
 
   return rawsql.begin(async (tx: any) => {
+    // Lock the invoice row first and re-read status *after* the lock. Without
+    // this, two parallel finalize calls on the same draft both pass the
+    // status check from their pre-lock snapshots and proceed to insert
+    // duplicate snapshot lines + burn an extra sequence number.
+    const [invLocked] = await tx`SELECT id, status FROM invoices WHERE id=${invoiceId} FOR UPDATE`;
+    if (!invLocked) throw Object.assign(new Error('Invoice not found'), { status: 404, code: 'not_found' });
+    if (invLocked.status !== 'draft') throw Object.assign(new Error('Not a draft'), { status: 409, code: 'not_draft' });
     const [inv] = await tx`SELECT i.*, j.code AS job_code FROM invoices i JOIN jobs j ON j.id=i.job_id WHERE i.id=${invoiceId}`;
-    if (inv.status !== 'draft') throw Object.assign(new Error('Not a draft'), { status: 409, code: 'not_draft' });
 
-    // Serialize sequence assignment per job by locking the job row first
-    // (FOR UPDATE is not permitted alongside an aggregate query).
+    // Serialize sequence assignment per job by locking the job row next.
     // NB: MAX is taken over ALL invoices for the job (including 'void') so a
     // voided invoice's sequence number is retained and never reused — this
     // honors the Phase 16 acceptance criteria ("sequence numbers skip voided
@@ -231,14 +247,19 @@ export async function finalizeInvoice(invoiceId: string, userId: string | null):
     // snapshot line items
     let order = 0;
     const ins = async (row: any) =>
-      tx`INSERT INTO invoice_line_items (invoice_id, line_order, line_type, category, employee_id, expense_id, description, tier, quantity, unit_rate, amount, cost_amount)
-         VALUES (${invoiceId}, ${order++}, ${row.line_type}, ${row.category ?? null}, ${row.employee_id ?? null}, ${row.expense_id ?? null}, ${row.description}, ${row.tier ?? null}, ${row.quantity ?? null}, ${row.unit_rate ?? null}, ${row.amount}, ${row.cost_amount ?? null})`;
+      tx`INSERT INTO invoice_line_items (invoice_id, line_order, line_type, category, employee_id, expense_id, time_entry_id, description, tier, quantity, unit_rate, amount, cost_amount)
+         VALUES (${invoiceId}, ${order++}, ${row.line_type}, ${row.category ?? null}, ${row.employee_id ?? null}, ${row.expense_id ?? null}, ${row.time_entry_id ?? null}, ${row.description}, ${row.tier ?? null}, ${row.quantity ?? null}, ${row.unit_rate ?? null}, ${row.amount}, ${row.cost_amount ?? null})`;
 
     for (const l of preview.labor_lines) {
       if (l.amount === 0) continue;
       await ins({
         line_type: l.is_overhead ? 'overhead' : 'labor',
         employee_id: l.employee_id,
+        // time_entry_id is null for the synthetic overhead line; for real
+        // labor it lets the package PDF resolve the per-day rate after a
+        // mid-invoice promotion (where the same employee+tier has
+        // different unit_rates across dates in the snapshot).
+        time_entry_id: l.is_overhead ? null : l.time_entry_id,
         description: l.is_overhead ? `${l.employee_name} – Overhead` : `${l.employee_name} – ${l.tier_label}`,
         tier: l.tier,
         quantity: l.hours,

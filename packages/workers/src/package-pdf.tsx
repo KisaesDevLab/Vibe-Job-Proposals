@@ -246,14 +246,18 @@ function tierMult(label: string): string {
   return '1.0 X';
 }
 
-type LaborRow = { employee_name: string; tier_label: string; hours: number; rate: string; amount: string };
+type LaborRow = { employee_name: string; tier_label: string; hours: number; rate: string; amount: string; is_overhead: boolean };
 function aggregateLabor(rows: any[]): LaborRow[] {
-  // Group by (employee, tier). Amount is summed; rate is taken from any row in
-  // the group (rate per tier should be constant for an employee at finalize
-  // time — schedules don't change mid-snapshot).
+  // Group by (employee, tier, unit_rate, is_overhead). Keying on rate ensures
+  // a mid-invoice promotion (same employee/tier, different rates across dates)
+  // emits separate lines so `rate × hours = amount` stays true visually.
+  // Keying on is_overhead also keeps a worker who is also the overhead
+  // employee from collapsing their real labor into the overhead row.
   const map = new Map<string, LaborRow>();
   for (const r of rows) {
-    const key = `${r.employee_name}|${r.tier_label}`;
+    const oh = !!r.is_overhead;
+    const rateNum = parseFloat(String(r.rate).replace(/[$,]/g, '')) || 0;
+    const key = `${r.employee_name}|${r.tier_label}|${rateNum.toFixed(2)}|${oh ? 'oh' : 'l'}`;
     const amt = parseFloat(String(r.amount).replace(/[$,]/g, '')) || 0;
     const cur = map.get(key);
     if (cur) {
@@ -261,12 +265,18 @@ function aggregateLabor(rows: any[]): LaborRow[] {
       const curAmt = parseFloat(String(cur.amount).replace(/[$,]/g, '')) || 0;
       cur.amount = (curAmt + amt).toFixed(2);
     } else {
-      map.set(key, { employee_name: r.employee_name, tier_label: r.tier_label, hours: Number(r.hours || 0), rate: r.rate, amount: amt.toFixed(2) });
+      map.set(key, { employee_name: r.employee_name, tier_label: r.tier_label, hours: Number(r.hours || 0), rate: r.rate, amount: amt.toFixed(2), is_overhead: oh });
     }
   }
-  // Sort: employee asc, then ST → OT → DT
+  // Sort: real labor before overhead; within each, employee asc, then ST → OT → DT, then rate asc.
   const tierOrder = (t: string) => (/double/i.test(t) ? 2 : /over/i.test(t) ? 1 : 0);
-  return [...map.values()].sort((a, b) => a.employee_name.localeCompare(b.employee_name) || tierOrder(a.tier_label) - tierOrder(b.tier_label));
+  const num = (s: string) => parseFloat(String(s).replace(/[$,]/g, '')) || 0;
+  return [...map.values()].sort((a, b) =>
+    Number(a.is_overhead) - Number(b.is_overhead)
+    || a.employee_name.localeCompare(b.employee_name)
+    || tierOrder(a.tier_label) - tierOrder(b.tier_label)
+    || num(a.rate) - num(b.rate),
+  );
 }
 function stripDollar(v: string | undefined): string {
   return String(v ?? '').replace(/^\$/, '');
@@ -286,8 +296,10 @@ function expenseTotalIncludingMarkup(byCat: Map<string, any>, markup: any[]): nu
 function EmployeeHoursPage({ d }: { d: PackageData }) {
   // The overhead employee appears as a synthetic row with its calc hours
   // landing under ST (per design — overhead is dollars-driven, not real time).
+  // Label distinguishes it from any real-labor row the same employee may have
+  // on this invoice (e.g., the foreman is overhead AND worked real ST hours).
   const rows = d.overhead
-    ? [...d.employeeHours, { employeeName: d.overhead.employeeName, st: d.overhead.hours, ot: 0, dt: 0 }]
+    ? [...d.employeeHours, { employeeName: `${d.overhead.employeeName} — Overhead`, st: d.overhead.hours, ot: 0, dt: 0 }]
     : d.employeeHours;
   const totals = rows.reduce(
     (a, r) => ({ st: a.st + r.st, ot: a.ot + r.ot, dt: a.dt + r.dt }),

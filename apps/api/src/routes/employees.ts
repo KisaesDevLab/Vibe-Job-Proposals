@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { ok, fail, employeeSchema, costRateSchema } from '@darrow/shared';
-import { db, sql as rawsql, employees, employeeCostRates, rateLevels, timeEntries } from '@darrow/db';
+import { ok, fail, employeeSchema, costRateSchema, employeeLevelSchema } from '@darrow/shared';
+import { db, sql as rawsql, employees, employeeCostRates, employeeLevels, rateLevels, timeEntries } from '@darrow/db';
 import { eq, and, isNull, desc, asc, sql } from 'drizzle-orm';
 import { ah, HttpError } from '../error-handler.js';
 import type { AuthedRequest } from '../middleware/auth.js';
@@ -98,6 +98,86 @@ employeesRouter.put(
     if (!row) throw new HttpError(404, 'not_found', 'Employee not found');
     await writeAudit({ userId: req.user?.id, entityType: 'employee', entityId: row.id, action: body.active === false ? 'deactivate' : 'update', summary: `Updated employee ${row.name}` });
     res.json(ok(row));
+  }),
+);
+
+employeesRouter.get(
+  '/:id/levels',
+  ah(async (req, res) => {
+    const rows = await rawsql<any[]>`
+      SELECT el.id, el.level_id, l.name AS level_name,
+             el.effective_from::text AS effective_from,
+             el.effective_to::text AS effective_to,
+             el.created_at
+      FROM employee_levels el JOIN rate_levels l ON l.id = el.level_id
+      WHERE el.employee_id = ${req.params.id}
+      ORDER BY el.effective_from DESC`;
+    res.json(ok(rows));
+  }),
+);
+
+employeesRouter.post(
+  '/:id/levels',
+  ah(async (req: AuthedRequest, res) => {
+    const body = employeeLevelSchema.parse(req.body);
+    const empId = req.params.id;
+    const [emp] = await db.select().from(employees).where(eq(employees.id, empId));
+    if (!emp) throw new HttpError(404, 'not_found', 'Employee not found');
+    const [lvl] = await db.select().from(rateLevels).where(eq(rateLevels.id, body.level_id));
+    if (!lvl) return res.status(400).json(fail('bad_level', 'Rate level not found'));
+    if (!lvl.active) return res.status(400).json(fail('inactive_level', 'Rate level is inactive'));
+
+    // Locate the current open row; guard against no-op promotions and backdates
+    // that would land before the open row's start (which the gist exclusion
+    // constraint would otherwise reject with a raw 500).
+    const [openRow] = await db
+      .select()
+      .from(employeeLevels)
+      .where(and(eq(employeeLevels.employeeId, empId), isNull(employeeLevels.effectiveTo)));
+    if (openRow) {
+      if (openRow.levelId === body.level_id) {
+        return res.status(409).json(fail('same_level', 'Employee is already at this level'));
+      }
+      if (body.effective_from <= openRow.effectiveFrom) {
+        return res.status(409).json(fail('backdate_overlap', `New effective_from must be after the current level's start (${openRow.effectiveFrom})`));
+      }
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      const result = await db.transaction(async (tx) => {
+        // close prior open row (effective_to IS NULL) at the new effective_from
+        await tx
+          .update(employeeLevels)
+          .set({ effectiveTo: body.effective_from })
+          .where(and(eq(employeeLevels.employeeId, empId), isNull(employeeLevels.effectiveTo)));
+        const [row] = await tx
+          .insert(employeeLevels)
+          .values({ employeeId: empId, levelId: body.level_id, effectiveFrom: body.effective_from })
+          .returning();
+        // keep the denormalized "current" level on employees in sync when the
+        // promotion is in the past or today
+        if (body.effective_from <= today) {
+          await tx.update(employees).set({ levelId: body.level_id }).where(eq(employees.id, empId));
+        }
+        return row;
+      });
+      await writeAudit({
+        userId: req.user?.id,
+        entityType: 'employee',
+        entityId: empId,
+        action: 'update',
+        summary: `Changed level to ${lvl.name} effective ${body.effective_from}`,
+      });
+      res.status(201).json(ok(result));
+      return;
+    } catch (err: any) {
+      // 23P01 = exclusion_violation — overlapping date range
+      if (err?.code === '23P01') {
+        return res.status(409).json(fail('overlap', 'A level history row already covers this date range'));
+      }
+      throw err;
+    }
   }),
 );
 

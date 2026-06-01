@@ -10,10 +10,14 @@ const TIERS = ['st', 'ot', 'dt'] as const;
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function mondayOf(d: Date): string {
-  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  const dow = (x.getUTCDay() + 6) % 7; // Mon=0
-  x.setUTCDate(x.getUTCDate() - dow);
-  return x.toISOString().slice(0, 10);
+  // Use the user's LOCAL day-of-week, not UTC — at 8pm Central on a Sunday the
+  // UTC clock already shows Monday, which would jump us a week ahead.
+  const dow = (d.getDay() + 6) % 7; // Mon=0
+  const local = new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow);
+  const y = local.getFullYear();
+  const m = String(local.getMonth() + 1).padStart(2, '0');
+  const day = String(local.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 function addDays(iso: string, n: number): string {
   const d = new Date(iso + 'T00:00:00Z');
@@ -167,8 +171,16 @@ function WeekTable({ weekStart, rows, onChanged, showEmployee, renderEmployeeFoo
       return next;
     });
 
-    // Fire all saves in parallel; reconcile once after all settle.
-    const results = await Promise.all(writes.map((w) => saveCell(w.employee_id, w.job_id, w.date, w.tier, w.value)));
+    // Cap concurrency to keep the DB connection pool sane for large pastes.
+    // A typical paste is 21 cells (one row), so this kicks in only for
+    // multi-row / multi-employee blocks.
+    const CHUNK = 20;
+    const results: Array<number | null> = [];
+    for (let i = 0; i < writes.length; i += CHUNK) {
+      const slice = writes.slice(i, i + CHUNK);
+      const r = await Promise.all(slice.map((w) => saveCell(w.employee_id, w.job_id, w.date, w.tier, w.value)));
+      results.push(...r);
+    }
     setEdits((prev) => {
       const next = { ...prev };
       results.forEach((saved, i) => { if (saved !== null) next[writes[i].cellKey] = saved ? String(saved) : ''; });

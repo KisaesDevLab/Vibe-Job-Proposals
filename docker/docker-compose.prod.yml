@@ -1,4 +1,14 @@
-# Production stack: app (api + workers) + Postgres + Redis.
+# Production stack: app (api + workers) + Postgres + Redis + Caddy + Cloudflared.
+#
+# Tunnel flow:
+#   1. Admin lands on the LAN UI at http://<host>:3000 (api/web served directly).
+#   2. Settings → Remote access → enter Cloudflare API token → Verify.
+#   3. Pick a zone + subdomain → click Provision.
+#   4. The api writes /storage/cloudflared/tunnel.env (TUNNEL_TOKEN=…),
+#      renders /storage/caddy/Caddyfile, reloads Caddy via :2019/load,
+#      and restarts cloudflared via the Docker socket.
+#   5. Public traffic now flows: Internet → Cloudflare edge → cloudflared
+#      → Caddy:443 (self-signed; trusted via noTLSVerify) → app:3000.
 services:
   app:
     image: ghcr.io/kisaesdevlab/darrow-time-invoicing:latest
@@ -18,14 +28,71 @@ services:
       NODE_ENV: production
       LOG_LEVEL: info
       SMTP_ENC_KEY: ${SMTP_ENC_KEY:-}
+      TUNNEL_ENC_KEY: ${TUNNEL_ENC_KEY:-}
       PUBLIC_UPLOAD_TOKEN: ${PUBLIC_UPLOAD_TOKEN:-}
+      # Caddy admin endpoint + service-name hints used by the tunnel service.
+      CADDY_ADMIN_URL: http://caddy:2019
+      CADDY_API_HOST: app
+      CADDY_API_PORT: '3000'
+      CADDY_WEB_HOST: app
+      CADDY_WEB_PORT: '3000'
+      CLOUDFLARED_CONTAINER: cloudflared
     ports: ['3000:3000']
-    volumes: ['storage:/storage']
+    volumes:
+      - storage:/storage
+      # Read-only docker socket so the api can restart cloudflared after
+      # provisioning. Required for the Settings → Remote access workflow.
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app: { condition: service_healthy }
+    volumes:
+      # Bind the directory (not the file) so atomic Caddyfile rename
+      # re-resolves the inode without a container restart.
+      - storage:/storage:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    # Caddy looks for /etc/caddy/Caddyfile by default; we point it at the
+    # one written by the api into the shared /storage volume.
+    command: ['caddy', 'run', '--config', '/storage/caddy/Caddyfile', '--adapter', 'caddyfile']
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:2019/config/']
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    # No restart on boot — the api starts/restarts this container via the
+    # Docker socket after writing /storage/cloudflared/tunnel.env. Reading
+    # the token from the shared volume at entrypoint time avoids any
+    # host-path bind mount and works on every deploy target.
+    restart: 'no'
+    depends_on:
+      caddy: { condition: service_started }
+    volumes:
+      - storage:/storage:ro
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        set -e
+        F=/storage/cloudflared/tunnel.env
+        if [ ! -s "$$F" ]; then
+          echo "[cloudflared] $$F not found or empty — provision the tunnel from Settings → Remote access" >&2
+          exit 1
+        fi
+        . "$$F"
+        [ -n "$$TUNNEL_TOKEN" ] || { echo "[cloudflared] TUNNEL_TOKEN unset" >&2; exit 1; }
+        exec cloudflared tunnel --no-autoupdate run --token "$$TUNNEL_TOKEN"
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -52,3 +119,5 @@ volumes:
   pgdata:
   redisdata:
   storage:
+  caddy_data:
+  caddy_config:

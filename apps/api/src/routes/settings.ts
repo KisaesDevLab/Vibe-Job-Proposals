@@ -19,9 +19,15 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 async function getSettings() {
   const [row] = await db.select().from(settings).where(eq(settings.id, 1)).limit(1);
   const markups = await db.select().from(settingsMarkupDefaults);
-  // Never expose the encrypted SMTP password; surface a boolean instead.
-  const { smtpPasswordEnc, ...safe } = row as any;
-  return { ...safe, smtp_password_set: !!smtpPasswordEnc, markups };
+  // Strip every *_enc blob from the response; surface presence as a boolean.
+  const { smtpPasswordEnc, cfApiTokenEnc, tunnelTokenEnc, ...safe } = row as any;
+  return {
+    ...safe,
+    smtp_password_set: !!smtpPasswordEnc,
+    cf_api_token_set: !!cfApiTokenEnc,
+    tunnel_token_set: !!tunnelTokenEnc,
+    markups,
+  };
 }
 
 function normalizePhone(p: string): string {
@@ -236,5 +242,82 @@ settingsRouter.get(
     const docPath = join(process.cwd(), 'docs', 'PLACEHOLDERS.md');
     const text = existsSync(docPath) ? readFileSync(docPath, 'utf8') : '# Placeholders\nSee docs/PLACEHOLDERS.md';
     res.json(ok({ markdown: text, categories: EXPENSE_CATEGORIES }));
+  }),
+);
+
+// ─── Cloudflare Tunnel + Caddy ─────────────────────────────────────────────
+import { verifyToken as cfVerify, listAccounts as cfListAccounts, listZones as cfListZones, CfError } from '../services/cloudflare.js';
+import { provisionTunnel, disableTunnel, tunnelStatus } from '../services/tunnel.js';
+
+const tunnelVerifySchema = z.object({ api_token: z.string().min(8) });
+const tunnelProvisionSchema = z.object({
+  api_token: z.string().min(8),
+  account_id: z.string().min(1),
+  zone_id: z.string().min(1),
+  zone_name: z.string().min(1),
+  tunnel_name: z.string().min(1).max(60).regex(/^[a-zA-Z0-9._-]+$/, 'tunnel_name letters/digits/._- only'),
+  subdomain: z.string().min(1).max(63).regex(/^[a-z0-9-]+$/, 'subdomain must be lowercase letters/digits/hyphens'),
+});
+
+settingsRouter.get(
+  '/tunnel',
+  ah(async (_req, res) => {
+    res.json(ok(await tunnelStatus()));
+  }),
+);
+
+// Validate a CF token + return the accounts/zones the operator can pick from.
+settingsRouter.post(
+  '/tunnel/verify',
+  ah(async (req, res) => {
+    if (!process.env.TUNNEL_ENC_KEY) {
+      return res.status(400).json(fail('no_enc_key', 'TUNNEL_ENC_KEY must be set to configure Cloudflare Tunnel'));
+    }
+    const body = tunnelVerifySchema.parse(req.body);
+    try {
+      await cfVerify(body.api_token);
+      const accounts = await cfListAccounts(body.api_token);
+      const zones = await cfListZones(body.api_token);
+      res.json(ok({ accounts, zones }));
+    } catch (err) {
+      if (err instanceof CfError) return res.status(400).json(fail('cf_error', err.message));
+      throw err;
+    }
+  }),
+);
+
+settingsRouter.post(
+  '/tunnel/provision',
+  ah(async (req: AuthedRequest, res) => {
+    if (!process.env.TUNNEL_ENC_KEY) {
+      return res.status(400).json(fail('no_enc_key', 'TUNNEL_ENC_KEY must be set to configure Cloudflare Tunnel'));
+    }
+    const body = tunnelProvisionSchema.parse(req.body);
+    try {
+      const result = await provisionTunnel({
+        apiToken: body.api_token,
+        accountId: body.account_id,
+        zoneId: body.zone_id,
+        zoneName: body.zone_name,
+        tunnelName: body.tunnel_name,
+        subdomain: body.subdomain,
+      });
+      await writeAudit({ userId: req.user?.id, entityType: 'settings', entityId: '1', action: 'update', summary: `Provisioned tunnel ${result.fqdn}` });
+      res.json(ok(result));
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      await db.update(settings).set({ tunnelStatus: 'error', tunnelLastError: msg }).where(eq(settings.id, 1));
+      if (err instanceof CfError) return res.status(502).json(fail('cf_error', msg));
+      return res.status(500).json(fail('provision_failed', msg));
+    }
+  }),
+);
+
+settingsRouter.post(
+  '/tunnel/disable',
+  ah(async (req: AuthedRequest, res) => {
+    await disableTunnel();
+    await writeAudit({ userId: req.user?.id, entityType: 'settings', entityId: '1', action: 'update', summary: 'Disabled Cloudflare Tunnel' });
+    res.json(ok({ disabled: true }));
   }),
 );

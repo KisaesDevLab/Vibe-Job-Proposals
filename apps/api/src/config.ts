@@ -15,6 +15,10 @@ const schema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, 'SMTP_ENC_KEY must be 64 hex chars (32 bytes)')
     .optional(),
+  TUNNEL_ENC_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, 'TUNNEL_ENC_KEY must be 64 hex chars (32 bytes)')
+    .optional(),
   PUBLIC_UPLOAD_TOKEN: z.string().optional(),
 });
 

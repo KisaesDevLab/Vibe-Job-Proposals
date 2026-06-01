@@ -42,6 +42,21 @@ export async function getRateAt(
   };
 }
 
+export type LevelLookup = { level_id: string } | { error: 'no_level'; detail: string };
+
+/** Resolve the rate level the employee held on workDate (effective-dated history). */
+export async function getLevelAt(employeeId: string, workDate: string): Promise<LevelLookup> {
+  const rows = await sql<{ level_id: string }[]>`
+    SELECT level_id FROM employee_levels
+    WHERE employee_id = ${employeeId}
+      AND daterange(effective_from, effective_to, '[)') @> ${workDate}::date
+    ORDER BY effective_from DESC LIMIT 1`;
+  if (rows.length === 0) {
+    return { error: 'no_level', detail: `No rate level for employee covering ${workDate}` };
+  }
+  return { level_id: rows[0].level_id };
+}
+
 export interface CostResult {
   cost_st: number;
   cost_ot: number;

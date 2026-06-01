@@ -23,6 +23,7 @@ import { timeRouter } from './routes/time.js';
 import { expensesRouter } from './routes/expenses.js';
 import { inboxRouter } from './routes/inbox.js';
 import { invoicesRouter } from './routes/invoices.js';
+import { invoiceSummariesRouter } from './routes/invoice-summaries.js';
 import { reportsRouter } from './routes/reports.js';
 
 export function createApp(): express.Express {
@@ -99,6 +100,7 @@ export function createApp(): express.Express {
   app.use('/api/expenses', expensesRouter);
   app.use('/api/inbox', inboxRouter);
   app.use('/api/invoices', invoicesRouter);
+  app.use('/api/invoice-summaries', invoiceSummariesRouter);
   app.use('/api/reports', reportsRouter);
 
   app.use('/api', (_req, res) => res.status(404).json(fail('not_found', 'Route not found')));

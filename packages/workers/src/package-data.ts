@@ -89,23 +89,43 @@ export async function buildPackageData(invoiceId: string): Promise<PackageData> 
     ? { employeeName: ohRow.employee_name, hours: Number(ohRow.quantity), amount: Number(ohRow.amount) }
     : null;
 
-  // Bound time entries — joined with employee name. invoice_id is set when the
-  // draft binds them and stays set through finalize/void; void unbinds.
-  const teRows = await sql<any[]>`
-    SELECT te.work_date::text AS work_date, te.employee_id, e.name AS employee_name,
+  // Source time-entry rows from the *snapshot* (invoice_line_items.time_entry_id)
+  // so the package stays consistent after void (which clears time_entries.invoice_id
+  // but leaves the snapshot intact). For pre-0020 finalized invoices where the
+  // snapshot lacks time_entry_id, fall back to the live binding so historical
+  // packages still render.
+  const snapshotTe = await sql<any[]>`
+    SELECT DISTINCT te.id, te.work_date::text AS work_date, te.employee_id,
+                    e.name AS employee_name, te.st_hours, te.ot_hours, te.dt_hours
+    FROM invoice_line_items li
+    JOIN time_entries te ON te.id = li.time_entry_id
+    JOIN employees e ON e.id = te.employee_id
+    WHERE li.invoice_id = ${invoiceId} AND li.line_type = 'labor' AND li.time_entry_id IS NOT NULL
+    ORDER BY te.work_date, e.name`;
+  const teRows = snapshotTe.length > 0 ? snapshotTe : await sql<any[]>`
+    SELECT te.id, te.work_date::text AS work_date, te.employee_id, e.name AS employee_name,
            te.st_hours, te.ot_hours, te.dt_hours
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
     WHERE te.invoice_id = ${invoiceId}
     ORDER BY te.work_date, e.name`;
 
-  // Bill rate per (employee, tier) is constant within a single invoice (the
-  // schedule doesn't change mid-snapshot), so resolving from any matching
-  // labor line is enough. Used to compute the Total Labor $ column on page 3.
+  // Per-row labor $ source. Prefer the snapshot's per-time-entry amount
+  // (which is correct even when a mid-invoice promotion makes a single
+  // (employee, tier) carry different unit_rates across dates). Pre-0020
+  // snapshots have NULL time_entry_id; fall back to the (employee, tier)
+  // rate map for those.
+  const amountRows = await sql<any[]>`
+    SELECT time_entry_id, amount
+    FROM invoice_line_items
+    WHERE invoice_id = ${invoiceId} AND line_type = 'labor' AND time_entry_id IS NOT NULL`;
+  const amountByTeId = new Map<string, number>();
+  for (const r of amountRows) amountByTeId.set(r.time_entry_id, (amountByTeId.get(r.time_entry_id) ?? 0) + Number(r.amount));
+
   const rateRows = await sql<any[]>`
     SELECT employee_id, tier, unit_rate
     FROM invoice_line_items
-    WHERE invoice_id = ${invoiceId} AND line_type = 'labor' AND employee_id IS NOT NULL`;
+    WHERE invoice_id = ${invoiceId} AND line_type = 'labor' AND employee_id IS NOT NULL AND time_entry_id IS NULL`;
   const rateMap = new Map<string, number>();
   for (const r of rateRows) rateMap.set(`${r.employee_id}|${r.tier}`, Number(r.unit_rate));
   const rateOf = (empId: string, tier: 'st' | 'ot' | 'dt') => rateMap.get(`${empId}|${tier}`) ?? 0;
@@ -129,13 +149,19 @@ export async function buildPackageData(invoiceId: string): Promise<PackageData> 
     const st = Number(r.st_hours);
     const ot = Number(r.ot_hours);
     const dt = Number(r.dt_hours);
+    // Prefer the snapshot's sum-of-amounts for this time_entry (correct
+    // per-day even after a level promotion); fall back to hours × map rate.
+    const snapAmount = amountByTeId.get(r.id);
+    const laborAmount = snapAmount != null
+      ? snapAmount
+      : st * rateOf(r.employee_id, 'st') + ot * rateOf(r.employee_id, 'ot') + dt * rateOf(r.employee_id, 'dt');
     return {
       jobCode: inv.job_code,
       billedRef,
       workDate: r.work_date,
       employeeName: r.employee_name,
       st, ot, dt,
-      laborAmount: st * rateOf(r.employee_id, 'st') + ot * rateOf(r.employee_id, 'ot') + dt * rateOf(r.employee_id, 'dt'),
+      laborAmount,
       dow: dowMonFirst(r.work_date),
     };
   });

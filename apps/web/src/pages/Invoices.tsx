@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Plus, Download, FileText, AlertTriangle } from 'lucide-react';
@@ -11,15 +11,16 @@ import { SearchSelect } from '@/components/SearchSelect';
 interface Invoice { id: string; billed_reference: string | null; status: string; job_code: string; customer_name: string; grand_total: string | null; through_date: string; imported_from_xlsm: boolean; }
 
 export function InvoicesPage() {
-  const [tab, setTab] = useState<'register' | 'billable'>('register');
+  const [tab, setTab] = useState<'register' | 'billable' | 'summaries'>('register');
   return (
     <div>
-      <PageHeader title="Invoices" subtitle="Invoice register & billable totals by date range" />
+      <PageHeader title="Invoices" subtitle="Invoice register, billable totals & summary invoices" />
       <div className="mb-5 flex gap-2 border-b border-line">
         <button onClick={() => setTab('register')} className={`px-3 py-2 text-sm font-medium ${tab === 'register' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>Register</button>
         <button onClick={() => setTab('billable')} className={`px-3 py-2 text-sm font-medium ${tab === 'billable' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>Billable by date range</button>
+        <button onClick={() => setTab('summaries')} className={`px-3 py-2 text-sm font-medium ${tab === 'summaries' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>Summaries</button>
       </div>
-      {tab === 'register' ? <InvoiceRegister /> : <BillableByRange />}
+      {tab === 'register' ? <InvoiceRegister /> : tab === 'billable' ? <BillableByRange /> : <SummariesPanel />}
     </div>
   );
 }
@@ -190,6 +191,162 @@ function NewDraft({ onClose, onCreated }: { onClose: () => void; onCreated: (id:
         <div><label className="label">Through date</label><input type="date" className="input" value={through_date} onChange={(e) => setThrough(e.target.value)} /></div>
         <p className="text-xs text-muted">All unbilled time &amp; expenses on/before this date will be auto-selected.</p>
         <div className="flex justify-end gap-2 pt-2"><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" onClick={() => m.mutate()} disabled={!job_id || m.isPending}>Create draft</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Summary invoices ──────────────────────────────────────────────────────
+
+interface SummaryRow { id: string; billed_reference: string; status: string; grand_total: string | null; customer_name: string; member_count: number; finalized_at: string | null; created_at: string; work_start_date: string | null; work_end_date: string | null; pdf_status: string | null; }
+interface EligibleInvoice { id: string; billed_reference: string; through_date: string; grand_total: string; job_code: string; job_description: string; }
+
+function SummariesPanel() {
+  const nav = useNavigate();
+  const qc = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const { data, isLoading } = useQuery({ queryKey: ['summaries'], queryFn: () => api.get<SummaryRow[]>('/invoice-summaries') });
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-sm text-muted">Bundle finalized invoices for one customer into a single billing document.</p>
+        <button className="btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> New Summary</button>
+      </div>
+      {isLoading ? <Skeleton /> : !data?.length ? <Empty title="No summary invoices yet" hint="Group several finalized invoices for a customer into one document" /> : (
+        <div className="card overflow-hidden">
+          <table className="w-full">
+            <thead><tr><th className="th">Number</th><th className="th">Customer</th><th className="th">Members</th><th className="th">Dates</th><th className="th text-right">Total</th><th className="th">Status</th></tr></thead>
+            <tbody>
+              {data.map((s) => (
+                <tr key={s.id} className="cursor-pointer hover:bg-paper" onClick={() => nav({ to: '/invoice-summaries/$id', params: { id: s.id } })}>
+                  <td className="td font-mono font-medium">{s.billed_reference}</td>
+                  <td className="td">{s.customer_name}</td>
+                  <td className="td">{s.member_count}</td>
+                  <td className="td">{s.work_start_date && s.work_end_date ? `${s.work_start_date} → ${s.work_end_date}` : '—'}</td>
+                  <td className="td text-right">{s.grand_total ? formatMoney(s.grand_total) : '—'}</td>
+                  <td className="td"><Badge status={s.status}>{s.status}</Badge></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {creating && <NewSummaryModal onClose={() => setCreating(false)} onCreated={(id) => { qc.invalidateQueries({ queryKey: ['summaries'] }); nav({ to: '/invoice-summaries/$id', params: { id } }); }} />}
+    </div>
+  );
+}
+
+function NewSummaryModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const { data: customers } = useQuery({ queryKey: ['customers'], queryFn: () => api.get<any[]>('/customers') });
+  const [customerId, setCustomerId] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [billedRef, setBilledRef] = useState('');
+  const [poNumber, setPoNumber] = useState('');
+  const [location, setLocation] = useState('');
+  const [description, setDescription] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const { data: eligible } = useQuery({
+    queryKey: ['summary-eligible', customerId],
+    queryFn: () => api.get<EligibleInvoice[]>(`/invoice-summaries/eligible-invoices?customer_id=${customerId}`),
+    enabled: !!customerId,
+  });
+  // Auto-suggest billed reference + date range when selection changes.
+  const memberIds = useMemo(() => [...selected], [selected]);
+  const memberCsv = memberIds.join(',');
+  const { data: suggest } = useQuery({
+    queryKey: ['summary-suggest', customerId, memberCsv],
+    queryFn: () => api.get<{ billed_reference: string; work_start_date: string | null; work_end_date: string | null }>(`/invoice-summaries/suggest-number?customer_id=${customerId}&member_ids=${memberCsv}`),
+    enabled: !!customerId && selected.size > 0,
+  });
+  // Seed defaults from the suggestion (only if the operator hasn't typed yet).
+  if (suggest && !billedRef) setBilledRef(suggest.billed_reference);
+  if (suggest && !start && suggest.work_start_date) setStart(suggest.work_start_date);
+  if (suggest && !end && suggest.work_end_date) setEnd(suggest.work_end_date);
+
+  const create = useMutation({
+    mutationFn: () => api.post<{ id: string }>('/invoice-summaries', {
+      customer_id: customerId,
+      member_invoice_ids: memberIds,
+      billed_reference: billedRef.trim() || undefined,
+      description,
+      po_number: poNumber || null,
+      location_of_service: location || null,
+      work_start_date: start || null,
+      work_end_date: end || null,
+    }),
+    onSuccess: (r) => { toast('Summary draft created'); onCreated(r.id); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+
+  function toggle(id: string) {
+    setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    setBilledRef(''); setStart(''); setEnd(''); // re-suggest on next fetch
+  }
+
+  return (
+    <Modal open onClose={onClose} title="New Summary Invoice" wide>
+      <div className="space-y-4">
+        <div>
+          <label className="label">Customer</label>
+          <SearchSelect
+            value={customerId}
+            onChange={(v) => { setCustomerId(v); setSelected(new Set()); setBilledRef(''); setStart(''); setEnd(''); }}
+            options={(customers ?? []).filter((c: any) => c.active).map((c: any) => ({ value: c.id, label: c.name }))}
+            placeholder="Select customer…"
+          />
+        </div>
+        {customerId && (
+          <div>
+            <div className="mb-1 text-sm font-semibold">Eligible finalized invoices <span className="text-muted">({eligible?.length ?? 0})</span></div>
+            {(!eligible || eligible.length === 0) ? (
+              <div className="rounded-lg border border-line p-3 text-sm text-muted">No finalized invoices for this customer that aren't already in another summary.</div>
+            ) : (
+              <div className="max-h-60 overflow-y-auto rounded-lg border border-line">
+                {eligible.map((inv) => (
+                  <label key={inv.id} className="flex cursor-pointer items-center gap-2 border-b border-line px-3 py-1.5 text-sm last:border-b-0 hover:bg-paper">
+                    <input type="checkbox" checked={selected.has(inv.id)} onChange={() => toggle(inv.id)} />
+                    <span className="font-mono">{inv.billed_reference}</span>
+                    <span className="font-mono text-muted">{inv.job_code}</span>
+                    <span className="flex-1 truncate text-muted">{inv.job_description}</span>
+                    <span className="font-semibold">{formatMoney(inv.grand_total)}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {selected.size > 0 && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Invoice number</label>
+                <input className="input font-mono" value={billedRef} onChange={(e) => setBilledRef(e.target.value)} placeholder={suggest?.billed_reference ?? '—'} />
+                <p className="mt-1 text-xs text-muted">Defaults to <span className="font-mono">{suggest?.billed_reference ?? '…'}</span></p>
+              </div>
+              <div>
+                <label className="label">P.O. number</label>
+                <input className="input" value={poNumber} onChange={(e) => setPoNumber(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label className="label">Location of Service</label>
+              <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Frontenac, KS" />
+            </div>
+            <div>
+              <label className="label">Description of Work</label>
+              <textarea className="input" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="label">Start</label><input type="date" className="input" value={start} onChange={(e) => setStart(e.target.value)} /></div>
+              <div><label className="label">End</label><input type="date" className="input" value={end} onChange={(e) => setEnd(e.target.value)} /></div>
+            </div>
+          </>
+        )}
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={() => create.mutate()} disabled={!customerId || selected.size === 0 || create.isPending}>Create draft</button>
+        </div>
       </div>
     </Modal>
   );

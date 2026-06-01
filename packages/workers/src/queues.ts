@@ -12,3 +12,9 @@ export const renderPackageQueue = new Queue('render-package', { connection: conn
 export async function enqueueRenderPackage(invoiceId: string): Promise<void> {
   await renderPackageQueue.add('render', { invoiceId }, { attempts: 2, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 100, removeOnFail: 200 });
 }
+
+export const renderSummaryPdfQueue = new Queue('render-summary-pdf', { connection: connection as any });
+
+export async function enqueueRenderSummaryPdf(summaryId: string): Promise<void> {
+  await renderSummaryPdfQueue.add('render', { summaryId }, { attempts: 2, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 100, removeOnFail: 200 });
+}

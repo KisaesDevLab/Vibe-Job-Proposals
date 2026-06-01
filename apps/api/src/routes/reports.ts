@@ -40,10 +40,14 @@ reportsRouter.get(
           COUNT(*) FILTER (WHERE te.invoice_id IS NULL) AS unbilled_time
         FROM time_entries te
         JOIN jobs j ON j.id = te.job_id
-        JOIN employees e ON e.id = te.employee_id
+        -- Resolve the level the employee held on te.work_date from the
+        -- effective-dated history. Using e.level_id (current) would re-rate
+        -- past hours at the new rate after a promotion.
+        LEFT JOIN employee_levels el ON el.employee_id = te.employee_id
+          AND daterange(el.effective_from, COALESCE(el.effective_to, 'infinity'::date), '[)') @> te.work_date
         LEFT JOIN rate_schedules rs ON rs.customer_id = j.customer_id
           AND daterange(rs.effective_from, rs.effective_to, '[)') @> te.work_date
-        LEFT JOIN rate_schedule_lines rsl ON rsl.schedule_id = rs.id AND rsl.level_id = e.level_id
+        LEFT JOIN rate_schedule_lines rsl ON rsl.schedule_id = rs.id AND rsl.level_id = el.level_id
         WHERE te.work_date BETWEEN ${from}::date AND ${to}::date
         GROUP BY te.job_id
       ),
@@ -136,6 +140,120 @@ reportsRouter.get(
         AND (${invoice_id ?? null}::uuid IS NULL OR x.invoice_id=${invoice_id ?? null}::uuid)
       ORDER BY x.category, x.work_date`;
     respond(res, rows, format, 'expense-list');
+  }),
+);
+
+// Job profit — billed labor, labor cost, expense markup, profit per job
+// summed across that job's *finalized* invoices. Used to compute commission.
+// Profit = billed_labor − labor_cost + expense_markup
+//        = (revenue across the snapshot) − (cost across the snapshot)
+// since expense subtotals net against expense costs (cost = amount for expenses).
+reportsRouter.get(
+  '/job-profit',
+  ah(async (req, res) => {
+    const { job_ids, format = 'json' } = req.query as Record<string, string>;
+    if (!job_ids) throw new HttpError(400, 'bad_request', 'job_ids (comma-separated uuids) required');
+    const ids = job_ids.split(',').map((s) => s.trim()).filter(Boolean);
+    if (ids.length === 0) throw new HttpError(400, 'bad_request', 'at least one job_id required');
+    // Basic uuid shape check to keep raw arg safe in the IN clause.
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    for (const id of ids) {
+      if (!uuidRe.test(id)) throw new HttpError(400, 'bad_request', `bad job id ${id}`);
+    }
+    const rows = await rawsql<any[]>`
+      SELECT j.id AS job_id, j.code, j.description, j.billing_type,
+             c.name AS customer_name,
+             COALESCE(SUM(i.total_labor), 0)::numeric(14,2) AS billed_labor,
+             COALESCE(SUM(i.total_labor_cost), 0)::numeric(14,2) AS labor_cost,
+             COALESCE(SUM(i.total_markup), 0)::numeric(14,2) AS expense_markup,
+             (COALESCE(SUM(i.total_labor), 0)
+              - COALESCE(SUM(i.total_labor_cost), 0)
+              + COALESCE(SUM(i.total_markup), 0))::numeric(14,2) AS profit,
+             COUNT(i.id)::int AS invoice_count
+      FROM jobs j
+      JOIN customers c ON c.id = j.customer_id
+      LEFT JOIN invoices i ON i.job_id = j.id AND i.status = 'finalized'
+      WHERE j.id IN ${rawsql(ids)}
+      GROUP BY j.id, j.code, j.description, j.billing_type, c.name
+      ORDER BY j.code`;
+    if (format === 'csv') {
+      const flat = rows.map((r) => ({ code: r.code, customer: r.customer_name, billing_type: r.billing_type, billed_labor: r.billed_labor, labor_cost: r.labor_cost, expense_markup: r.expense_markup, profit: r.profit, invoice_count: r.invoice_count }));
+      return respond(res, flat, 'csv', 'job-profit');
+    }
+    res.json(ok(rows));
+  }),
+);
+
+// Customer rate sheet — each active employee with their *current* bill rate
+// at the selected customer's *current* rate schedule (covering today).
+// Mirrors the rate one would resolve at preview/finalize for a time entry
+// dated today. Past-dated quotes should still consult level history + a
+// schedule covering the relevant date.
+reportsRouter.get(
+  '/customer-rate-sheet',
+  ah(async (req, res) => {
+    const { customer_id, format = 'json' } = req.query as Record<string, string>;
+    if (!customer_id) throw new HttpError(400, 'bad_request', 'customer_id required');
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = await rawsql<any[]>`
+      SELECT e.id AS employee_id, e.name AS employee, l.name AS level,
+             COALESCE(rsl.rate_1x, 0)::numeric(12,2) AS rate_1x,
+             COALESCE(rsl.rate_15x, 0)::numeric(12,2) AS rate_15x,
+             COALESCE(rsl.rate_2x, 0)::numeric(12,2) AS rate_2x,
+             (rsl.id IS NULL) AS missing
+      FROM employees e
+      JOIN rate_levels l ON l.id = e.level_id
+      LEFT JOIN rate_schedules rs ON rs.customer_id = ${customer_id}::uuid
+        AND daterange(rs.effective_from, rs.effective_to, '[)') @> ${today}::date
+      LEFT JOIN rate_schedule_lines rsl ON rsl.schedule_id = rs.id AND rsl.level_id = e.level_id
+      WHERE e.active = true
+      ORDER BY l.sort_order, e.name`;
+    respond(res, rows, format, 'customer-rate-sheet');
+  }),
+);
+
+// Time billing log — every bound or unbound time entry on a job with the
+// per-tier rate resolved from the employee's level history on the entry's
+// work_date and the customer's rate schedule covering that date. Mirrors
+// the pricing engine so this report is the operator-facing preview of what
+// each row will invoice for.
+reportsRouter.get(
+  '/time-billing-log',
+  ah(async (req, res) => {
+    const { job_id, invoice_id, from, to, format = 'json' } = req.query as Record<string, string>;
+    if (!job_id) throw new HttpError(400, 'bad_request', 'job_id required');
+    const rows = await rawsql<any[]>`
+      SELECT te.work_date::text AS date,
+             e.name AS employee,
+             l.name AS level,
+             te.st_hours, te.ot_hours, te.dt_hours,
+             COALESCE(rsl.rate_1x, 0)::numeric(12,2) AS rate_st,
+             COALESCE(rsl.rate_15x, 0)::numeric(12,2) AS rate_ot,
+             COALESCE(rsl.rate_2x, 0)::numeric(12,2) AS rate_dt,
+             (te.st_hours * COALESCE(rsl.rate_1x, 0))::numeric(12,2) AS amount_st,
+             (te.ot_hours * COALESCE(rsl.rate_15x, 0))::numeric(12,2) AS amount_ot,
+             (te.dt_hours * COALESCE(rsl.rate_2x, 0))::numeric(12,2) AS amount_dt,
+             (te.st_hours * COALESCE(rsl.rate_1x, 0)
+              + te.ot_hours * COALESCE(rsl.rate_15x, 0)
+              + te.dt_hours * COALESCE(rsl.rate_2x, 0))::numeric(12,2) AS amount,
+             (rsl.id IS NULL) AS missing_rate,
+             i.billed_reference AS invoice
+      FROM time_entries te
+      JOIN employees e ON e.id = te.employee_id
+      JOIN jobs j ON j.id = te.job_id
+      LEFT JOIN employee_levels el ON el.employee_id = te.employee_id
+        AND daterange(el.effective_from, COALESCE(el.effective_to, 'infinity'::date), '[)') @> te.work_date
+      LEFT JOIN rate_levels l ON l.id = el.level_id
+      LEFT JOIN rate_schedules rs ON rs.customer_id = j.customer_id
+        AND daterange(rs.effective_from, rs.effective_to, '[)') @> te.work_date
+      LEFT JOIN rate_schedule_lines rsl ON rsl.schedule_id = rs.id AND rsl.level_id = el.level_id
+      LEFT JOIN invoices i ON i.id = te.invoice_id
+      WHERE te.job_id = ${job_id}
+        AND (${invoice_id ?? null}::uuid IS NULL OR te.invoice_id = ${invoice_id ?? null}::uuid)
+        AND (${from ?? null}::date IS NULL OR te.work_date >= ${from ?? null}::date)
+        AND (${to ?? null}::date IS NULL OR te.work_date <= ${to ?? null}::date)
+      ORDER BY te.work_date, e.name`;
+    respond(res, rows, format, 'time-billing-log');
   }),
 );
 

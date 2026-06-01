@@ -20,6 +20,7 @@ import { TimePage } from './pages/Time';
 import { ExpensesPage } from './pages/Expenses';
 import { InvoicesPage } from './pages/Invoices';
 import { InvoiceDetailPage } from './pages/InvoiceDetail';
+import { InvoiceSummaryDetailPage } from './pages/InvoiceSummaryDetail';
 import { JobsPage } from './pages/Jobs';
 import { CustomersPage } from './pages/Customers';
 import { EmployeesPage } from './pages/Employees';
@@ -70,6 +71,14 @@ const invoiceDetailRoute = createRoute({
     return <InvoiceDetailPage id={id} />;
   },
 });
+const invoiceSummaryDetailRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/invoice-summaries/$id',
+  component: function SummaryDetail() {
+    const { id } = invoiceSummaryDetailRoute.useParams();
+    return <InvoiceSummaryDetailPage id={id} />;
+  },
+});
 const jobsRoute = createRoute({ getParentRoute: () => appRoute, path: '/jobs', component: JobsPage });
 const customersRoute = createRoute({ getParentRoute: () => appRoute, path: '/customers', component: CustomersPage });
 const employeesRoute = createRoute({ getParentRoute: () => appRoute, path: '/employees', component: EmployeesPage });
@@ -86,6 +95,7 @@ const routeTree = rootRoute.addChildren([
     expensesRoute,
     invoicesRoute,
     invoiceDetailRoute,
+    invoiceSummaryDetailRoute,
     jobsRoute,
     customersRoute,
     employeesRoute,

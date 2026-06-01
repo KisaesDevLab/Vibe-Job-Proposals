@@ -89,6 +89,19 @@ export const settings = pgTable('settings', {
   smtpFromAddress: text('smtp_from_address'),
   smtpFromName: text('smtp_from_name'),
   smtpEnabled: boolean('smtp_enabled').notNull().default(false),
+  // Cloudflare Tunnel + Caddy (migration 0021). Tokens AES-256-GCM-encrypted.
+  tunnelEnabled: boolean('tunnel_enabled').notNull().default(false),
+  cfApiTokenEnc: text('cf_api_token_enc'),
+  cfAccountId: text('cf_account_id'),
+  cfZoneId: text('cf_zone_id'),
+  cfZoneName: text('cf_zone_name'),
+  tunnelName: text('tunnel_name'),
+  tunnelSubdomain: text('tunnel_subdomain'),
+  tunnelId: text('tunnel_id'),
+  tunnelTokenEnc: text('tunnel_token_enc'),
+  tunnelStatus: text('tunnel_status').notNull().default('disabled'),
+  tunnelLastError: text('tunnel_last_error'),
+  tunnelLastProvisionedAt: timestamp('tunnel_last_provisioned_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -128,6 +141,19 @@ export const employeeCostRates = pgTable('employee_cost_rates', {
   costSt: numeric('cost_st', { precision: 12, scale: 2 }).notNull().default('0'),
   costOt: numeric('cost_ot', { precision: 12, scale: 2 }).notNull().default('0'),
   costDt: numeric('cost_dt', { precision: 12, scale: 2 }).notNull().default('0'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const employeeLevels = pgTable('employee_levels', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: uuid('employee_id')
+    .notNull()
+    .references(() => employees.id),
+  levelId: uuid('level_id')
+    .notNull()
+    .references(() => rateLevels.id),
+  effectiveFrom: date('effective_from').notNull(),
+  effectiveTo: date('effective_to'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -295,6 +321,39 @@ export const invoices = pgTable('invoices', {
   grandTotal: numeric('grand_total', { precision: 12, scale: 2 }),
 });
 
+export const invoiceSummaries = pgTable('invoice_summaries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  customerId: uuid('customer_id').notNull().references(() => customers.id),
+  billedReference: text('billed_reference').notNull(),
+  status: invoiceStatus('status').notNull().default('draft'),
+  description: text('description').notNull().default(''),
+  poNumber: text('po_number'),
+  locationOfService: text('location_of_service'),
+  workStartDate: date('work_start_date'),
+  workEndDate: date('work_end_date'),
+  totalLabor: numeric('total_labor', { precision: 14, scale: 2 }),
+  totalMaterials: numeric('total_materials', { precision: 14, scale: 2 }),
+  totalEquipmentRent: numeric('total_equipment_rent', { precision: 14, scale: 2 }),
+  totalOther: numeric('total_other', { precision: 14, scale: 2 }),
+  grandTotal: numeric('grand_total', { precision: 14, scale: 2 }),
+  generatedPdfPath: text('generated_pdf_path'),
+  pdfStatus: attachmentStatus('pdf_status'),
+  pdfError: text('pdf_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id),
+  finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+  voidedAt: timestamp('voided_at', { withTimezone: true }),
+  voidReason: text('void_reason'),
+  voidedByUserId: uuid('voided_by_user_id').references(() => users.id),
+});
+
+export const invoiceSummaryMembers = pgTable('invoice_summary_members', {
+  summaryId: uuid('summary_id').notNull().references(() => invoiceSummaries.id, { onDelete: 'cascade' }),
+  invoiceId: uuid('invoice_id').notNull().references(() => invoices.id),
+  sortOrder: integer('sort_order').notNull().default(0),
+  active: boolean('active').notNull().default(true),
+});
+
 export const invoiceMarkupOverrides = pgTable('invoice_markup_overrides', {
   invoiceId: uuid('invoice_id')
     .notNull()
@@ -303,6 +362,8 @@ export const invoiceMarkupOverrides = pgTable('invoice_markup_overrides', {
   percent: numeric('percent', { precision: 5, scale: 4 }).notNull(),
 });
 
+// Note: time_entry_id is added via migration 0020 to support per-date rate
+// resolution on the package PDF after level history was introduced.
 export const invoiceLineItems = pgTable('invoice_line_items', {
   id: uuid('id').primaryKey().defaultRandom(),
   invoiceId: uuid('invoice_id')
@@ -313,6 +374,7 @@ export const invoiceLineItems = pgTable('invoice_line_items', {
   category: expenseCategory('category'),
   employeeId: uuid('employee_id').references(() => employees.id),
   expenseId: uuid('expense_id').references(() => expenses.id),
+  timeEntryId: uuid('time_entry_id'),
   description: text('description').notNull(),
   tier: tierEnum('tier'),
   quantity: numeric('quantity', { precision: 12, scale: 2 }),
