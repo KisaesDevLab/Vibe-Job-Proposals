@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   createRouter,
   createRoute,
@@ -12,7 +12,8 @@ import {
 import './index.css';
 import './lib/prefs'; // apply saved font-size + wide-mode before first paint
 import { AuthProvider } from './lib/auth';
-import { api } from './lib/api';
+import { api, ApiError } from './lib/api';
+import { toast } from './components/ui';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/Login';
 import { PublicUploadPage } from './pages/PublicUpload';
@@ -29,8 +30,26 @@ import { ReadinessPage } from './pages/Readiness';
 import { ImportPage } from './pages/Import';
 import { SettingsPage } from './pages/Settings';
 
-const queryClient = new QueryClient({
+// When any query or mutation hits a 401, the session has expired. Clear the
+// cache and bounce to /login so the user isn't stuck clicking Save on a dead
+// session and seeing the same auth toast every time. The check happens once
+// here rather than in every onError handler.
+function handleAuthError(err: unknown) {
+  if (err instanceof ApiError && err.status === 401) {
+    queryClient.clear();
+    toast('Session expired — please sign in again', 'err');
+    // setTimeout defers the navigation until after the current event handlers
+    // unwind so React isn't mid-render.
+    setTimeout(() => { window.location.assign('/login'); }, 0);
+    return true;
+  }
+  return false;
+}
+
+const queryClient: QueryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
+  queryCache: new QueryCache({ onError: handleAuthError }),
+  mutationCache: new MutationCache({ onError: handleAuthError }),
 });
 
 // Auth guard for the protected area: redirect to /login if not authenticated.
