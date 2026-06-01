@@ -15,7 +15,7 @@ import { sql } from '@darrow/db';
 import { EXPENSE_CATEGORIES, type ExpenseCategory } from '@darrow/shared';
 import { writeAudit } from '../audit.js';
 
-export type ImportType = 'expenses' | 'customers' | 'time-entries';
+export type ImportType = 'expenses' | 'customers' | 'jobs' | 'time-entries';
 
 export interface PreviewError { row: number; field?: string; message: string; }
 export interface PreviewResult<TRow = any> {
@@ -485,12 +485,148 @@ async function commitTimeEntries(rows: Array<TimeEntryRow & { _row: number }>, u
   return { inserted, updated, skipped };
 }
 
+// ─── Importer: Jobs ────────────────────────────────────────────────────────
+
+interface JobRow {
+  code: string;
+  customer: string;        // looked up case-insensitively against customers.name
+  description: string;
+  po_number: string | null;
+  billing_type: 'tm' | 'quote';
+  site_address1: string;
+  site_address2: string;
+  site_city: string;
+  site_state: string;
+  site_zip: string;
+  active: boolean;
+  notes: string | null;
+}
+
+function normalizeBillingType(v: Cell): 'tm' | 'quote' | null {
+  const s = toStr(v).toLowerCase().replace(/[^a-z]/g, '');
+  if (!s) return 'tm'; // default to T&M when blank
+  if (s === 'tm' || s === 'tandm' || s === 'timematerial' || s === 'timematerials' || s === 'timeandmaterials') return 'tm';
+  if (s === 'quote' || s === 'fixed' || s === 'fixedprice') return 'quote';
+  return null;
+}
+
+function normalizeActive(v: Cell): boolean {
+  const s = toStr(v).toLowerCase();
+  if (s === '' || s === 'true' || s === 'yes' || s === 'y' || s === '1' || s === 'active') return true;
+  if (s === 'false' || s === 'no' || s === 'n' || s === '0' || s === 'inactive') return false;
+  return true; // safe default
+}
+
+async function previewJobs(buffer: Buffer): Promise<PreviewResult<JobRow>> {
+  const sheet = await readFirstNonEmptySheet(buffer);
+  const customers = await sql<{ id: string; name: string }[]>`SELECT id, name FROM customers`;
+  const custByName = new Map(customers.map((c) => [c.name.toLowerCase(), c]));
+
+  const rows: Array<JobRow & { _row: number; _errors?: string[] }> = [];
+  const errors: PreviewError[] = [];
+  // Track duplicate codes inside the same sheet — a second occurrence is
+  // surfaced as an error so the operator knows the row will overwrite.
+  const seenCodes = new Set<string>();
+
+  for (const r of sheet.rows) {
+    const rowNum = r._row as number;
+    const code = toStr(r.code ?? r.job ?? r.job_code ?? r.jobcode);
+    const customer = toStr(r.customer ?? r.customer_name ?? r.client);
+    const description = toStr(r.description ?? r.job_description ?? r.desc);
+    const po_number = toStr(r.po ?? r.po_number ?? r.purchase_order) || null;
+    const billing = normalizeBillingType(r.billing_type ?? r.billing ?? r.type ?? r.t_m_quote);
+    const site_address1 = toStr(r.site_address ?? r.site_address1 ?? r.address ?? r.site_street);
+    const site_address2 = toStr(r.site_address2 ?? r.address2);
+    const site_city = toStr(r.site_city ?? r.city);
+    const site_state = toStr(r.site_state ?? r.state);
+    const site_zip = toStr(r.site_zip ?? r.zip);
+    const active = normalizeActive(r.active ?? r.status);
+    const notes = toStr(r.notes ?? r.note) || null;
+
+    const rowErrors: string[] = [];
+    if (!code) rowErrors.push('Job code required');
+    else if (seenCodes.has(code.toLowerCase())) rowErrors.push(`Duplicate code "${code}" in this sheet`);
+    else seenCodes.add(code.toLowerCase());
+    if (!customer) rowErrors.push('Customer required');
+    else if (!custByName.has(customer.toLowerCase())) rowErrors.push(`Customer "${customer}" not found`);
+    if (!description) rowErrors.push('Description required');
+    if (!billing) rowErrors.push('Billing type must be "tm" or "quote"');
+
+    rows.push({
+      _row: rowNum,
+      code,
+      customer,
+      description,
+      po_number,
+      billing_type: billing ?? 'tm',
+      site_address1, site_address2, site_city, site_state, site_zip,
+      active,
+      notes,
+      _errors: rowErrors.length ? rowErrors : undefined,
+    });
+    for (const m of rowErrors) errors.push({ row: rowNum, message: m });
+  }
+  return { type: 'jobs', sheet_name: sheet.sheetName, total_rows: rows.length, rows, errors };
+}
+
+async function commitJobs(rows: Array<JobRow & { _row: number }>, userId: string | null): Promise<CommitResult> {
+  const customers = await sql<{ id: string; name: string }[]>`SELECT id, name FROM customers`;
+  const custByName = new Map(customers.map((c) => [c.name.toLowerCase(), c.id]));
+
+  let inserted = 0, updated = 0, skipped = 0;
+  const s = (v: unknown): string => v == null ? '' : String(v);
+  for (const raw of rows) {
+    const customerId = custByName.get(raw.customer.toLowerCase());
+    if (!raw.code || !customerId || !raw.description) { skipped++; continue; }
+    const r = {
+      code: s(raw.code),
+      description: s(raw.description),
+      po_number: raw.po_number,
+      billing_type: raw.billing_type,
+      site_address1: s(raw.site_address1),
+      site_address2: s(raw.site_address2),
+      site_city: s(raw.site_city),
+      site_state: s(raw.site_state),
+      site_zip: s(raw.site_zip),
+      active: raw.active,
+      notes: raw.notes,
+    };
+    // citext makes code uniqueness case-insensitive at the column level.
+    const [existing] = await sql<{ id: string }[]>`SELECT id FROM jobs WHERE code = ${r.code}::citext LIMIT 1`;
+    if (existing) {
+      await sql`UPDATE jobs SET
+        customer_id = ${customerId},
+        description = ${r.description},
+        po_number = ${r.po_number},
+        billing_type = ${r.billing_type}::billing_type,
+        site_address1 = CASE WHEN ${r.site_address1} = '' THEN site_address1 ELSE ${r.site_address1} END,
+        site_address2 = CASE WHEN ${r.site_address2} = '' THEN site_address2 ELSE ${r.site_address2} END,
+        site_city = CASE WHEN ${r.site_city} = '' THEN site_city ELSE ${r.site_city} END,
+        site_state = CASE WHEN ${r.site_state} = '' THEN site_state ELSE ${r.site_state} END,
+        site_zip = CASE WHEN ${r.site_zip} = '' THEN site_zip ELSE ${r.site_zip} END,
+        active = ${r.active},
+        notes = CASE WHEN ${r.notes ?? ''} = '' THEN notes ELSE ${r.notes} END
+        WHERE id = ${existing.id}`;
+      updated++;
+    } else {
+      await sql`INSERT INTO jobs (code, customer_id, description, po_number, billing_type, site_address1, site_address2, site_city, site_state, site_zip, active, notes)
+        VALUES (${r.code}, ${customerId}, ${r.description}, ${r.po_number}, ${r.billing_type}::billing_type, ${r.site_address1}, ${r.site_address2}, ${r.site_city}, ${r.site_state}, ${r.site_zip}, ${r.active}, ${r.notes})`;
+      inserted++;
+    }
+  }
+  if (inserted + updated > 0) {
+    await writeAudit({ userId, entityType: 'job', entityId: 'bulk', action: 'import', summary: `Imported jobs from xlsx: ${inserted} new, ${updated} updated, ${skipped} skipped` });
+  }
+  return { inserted, updated, skipped };
+}
+
 // ─── Dispatch ──────────────────────────────────────────────────────────────
 
 export async function previewImport(type: ImportType, buffer: Buffer): Promise<PreviewResult> {
   switch (type) {
     case 'expenses': return previewExpenses(buffer);
     case 'customers': return previewCustomers(buffer);
+    case 'jobs': return previewJobs(buffer);
     case 'time-entries': return previewTimeEntries(buffer);
     default: throw new Error(`Unknown import type: ${type}`);
   }
@@ -500,6 +636,7 @@ export async function commitImport(type: ImportType, rows: any[], userId: string
   switch (type) {
     case 'expenses': return commitExpenses(rows, userId);
     case 'customers': return commitCustomers(rows, userId);
+    case 'jobs': return commitJobs(rows, userId);
     case 'time-entries': return commitTimeEntries(rows, userId);
     default: throw new Error(`Unknown import type: ${type}`);
   }
@@ -515,6 +652,11 @@ export const IMPORTER_TYPES: { value: ImportType; label: string; columns: string
     value: 'customers',
     label: 'Customers',
     columns: ['Name', 'Address1', 'Address2', 'City', 'State', 'Zip', 'Contact Name', 'Email', 'Phone'],
+  },
+  {
+    value: 'jobs',
+    label: 'Jobs',
+    columns: ['Code', 'Customer', 'Description', 'PO Number', 'Billing Type (tm | quote)', 'Site Address', 'City', 'State', 'Zip', 'Active', 'Notes'],
   },
   {
     value: 'time-entries',

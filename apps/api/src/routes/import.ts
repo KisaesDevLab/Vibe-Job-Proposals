@@ -9,7 +9,7 @@ import { previewImport, commitImport, IMPORTER_TYPES, type ImportType } from '..
 export const importRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
-const TYPES: ReadonlyArray<ImportType> = ['expenses', 'customers', 'time-entries'] as const;
+const TYPES: ReadonlyArray<ImportType> = ['expenses', 'customers', 'jobs', 'time-entries'] as const;
 
 importRouter.get('/types', ah(async (_req, res) => {
   res.json(ok(IMPORTER_TYPES));
