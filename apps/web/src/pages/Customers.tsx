@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -214,20 +214,18 @@ function OverheadTab({ customer, onChanged }: { customer: Customer; onChanged: (
 }
 
 interface Schedule { id: string; name: string; effectiveFrom: string; effectiveTo: string | null; lineCount: number; }
+interface GlobalSchedule { id: string; name: string; effectiveFrom: string; effectiveTo: string | null; customerId: string; customerName: string; lineCount: number; }
+
 function SchedulesTab({ customer }: { customer: Customer }) {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ['schedules', customer.id], queryFn: () => api.get<Schedule[]>(`/customers/${customer.id}/rate-schedules`) });
   const [editing, setEditing] = useState<string | null>(null);
-  const create = useMutation({
-    mutationFn: () => api.post<Schedule>(`/customers/${customer.id}/rate-schedules`, { name: `Schedule ${new Date().getFullYear()}`, effective_from: `${new Date().getFullYear()}-01-01` }),
-    onSuccess: (s) => { qc.invalidateQueries({ queryKey: ['schedules', customer.id] }); setEditing(s.id); },
-    onError: (e: any) => toast(e.message, 'err'),
-  });
+  const [creating, setCreating] = useState(false);
   if (editing) return <ScheduleEditor scheduleId={editing} onBack={() => { setEditing(null); qc.invalidateQueries({ queryKey: ['schedules', customer.id] }); }} customerId={customer.id} />;
   return (
     <div>
-      <button className="btn-primary mb-3" onClick={() => create.mutate()}><Plus size={16} /> New Schedule</button>
-      {!data?.length ? <Empty title="No schedules — create one to set bill rates" /> : (
+      <button className="btn-primary mb-3" onClick={() => setCreating(true)}><Plus size={16} /> New Schedule</button>
+      {!data?.length ? <Empty title="No schedules — create one to set bill rates" hint="You can copy rates from another customer to save typing" /> : (
         <div className="space-y-2">
           {data.map((s) => (
             <div key={s.id} className="flex items-center justify-between rounded-lg border border-line p-3">
@@ -237,7 +235,61 @@ function SchedulesTab({ customer }: { customer: Customer }) {
           ))}
         </div>
       )}
+      {creating && <NewScheduleModal customer={customer} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); qc.invalidateQueries({ queryKey: ['schedules', customer.id] }); setEditing(id); }} />}
     </div>
+  );
+}
+
+function NewScheduleModal({ customer, onClose, onCreated }: { customer: Customer; onClose: () => void; onCreated: (id: string) => void }) {
+  const year = new Date().getFullYear();
+  const [name, setName] = useState(`Schedule ${year}`);
+  const [effectiveFrom, setEffectiveFrom] = useState(`${year}-01-01`);
+  const [cloneFromId, setCloneFromId] = useState('');
+  // Pull every schedule that has at least one line; group by customer for
+  // the picker so it's obvious which firm we're cloning from. The current
+  // customer's own schedules are useful too (e.g. starting a 2027 schedule
+  // by copying their 2026 one), so we don't filter them out.
+  const { data: all } = useQuery({ queryKey: ['all-schedules'], queryFn: () => api.get<GlobalSchedule[]>('/rate-schedules') });
+  const options = useMemo(() => (all ?? []).map((s) => ({
+    value: s.id,
+    label: `${s.customerName} — ${s.name}`,
+    sublabel: `${s.effectiveFrom}${s.effectiveTo ? ` → ${s.effectiveTo}` : ' → open'} · ${s.lineCount} rate${s.lineCount === 1 ? '' : 's'}`,
+  })), [all]);
+  const m = useMutation({
+    mutationFn: () => api.post<Schedule>(`/customers/${customer.id}/rate-schedules`, {
+      name: name.trim() || `Schedule ${year}`,
+      effective_from: effectiveFrom,
+      clone_from_id: cloneFromId || undefined,
+    }),
+    onSuccess: (s) => { toast(cloneFromId ? 'Schedule created with copied rates' : 'Schedule created'); onCreated(s.id); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+  return (
+    <Modal open onClose={onClose} title={`New Schedule — ${customer.name}`}>
+      <div className="space-y-3">
+        <div><label className="label">Name</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div><label className="label">Effective from</label><input type="date" className="input" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} /></div>
+        <div>
+          <label className="label">Copy rates from <span className="text-muted">(optional)</span></label>
+          <SearchSelect
+            value={cloneFromId}
+            onChange={setCloneFromId}
+            options={options}
+            placeholder="Start blank…"
+            allowClear
+          />
+          <p className="mt-1 text-xs text-muted">
+            {cloneFromId
+              ? 'All level lines from the source schedule will be copied as the starting point — you can edit them right after.'
+              : 'Leave blank to start with an empty rate matrix.'}
+          </p>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={() => m.mutate()} disabled={m.isPending}>Create</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

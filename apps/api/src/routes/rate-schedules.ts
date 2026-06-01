@@ -65,11 +65,40 @@ customerScheduleRouter.post(
       await writeAudit({ userId: req.user?.id, entityType: 'rate_schedule', entityId: created.id, action: 'create', summary: `Created schedule ${created.name}` });
       res.status(201).json(ok(created));
     } catch (e: any) {
-      if (String(e?.message ?? e).includes('no_overlap')) {
-        return res.status(409).json(fail('overlap', 'Schedule dates overlap an existing schedule'));
+      // Postgres exclusion constraint (23P01) fires when the new schedule's
+      // date range overlaps an existing one for this customer. Drizzle wraps
+      // the postgres error so we check `.cause` and the message too.
+      const code = e?.code ?? e?.cause?.code;
+      const msg = String(e?.message ?? '') + ' ' + String(e?.cause?.message ?? '');
+      if (code === '23P01' || msg.includes('no_overlap') || msg.includes('exclusion')) {
+        return res.status(409).json(fail('overlap', 'Schedule dates overlap an existing schedule for this customer. Close the existing schedule (set its effective_to) before adding a new one.'));
       }
       throw e;
     }
+  }),
+);
+
+// GET /api/rate-schedules — global list, used by the "Copy rates from"
+// picker when creating a new schedule for a different customer. Returns
+// schedules that actually have at least one line (no point copying empty
+// ones). Caller-side groups by customer for the UI.
+rateSchedulesRouter.get(
+  '/',
+  ah(async (_req, res) => {
+    const rows = await db
+      .select({
+        id: rateSchedules.id,
+        name: rateSchedules.name,
+        effectiveFrom: rateSchedules.effectiveFrom,
+        effectiveTo: rateSchedules.effectiveTo,
+        customerId: rateSchedules.customerId,
+        customerName: customers.name,
+        lineCount: sql<number>`(SELECT count(*)::int FROM rate_schedule_lines WHERE schedule_id = ${rateSchedules.id})`,
+      })
+      .from(rateSchedules)
+      .leftJoin(customers, eq(rateSchedules.customerId, customers.id))
+      .orderBy(asc(customers.name), desc(rateSchedules.effectiveFrom));
+    res.json(ok(rows.filter((r) => r.lineCount > 0)));
   }),
 );
 
@@ -109,8 +138,13 @@ rateSchedulesRouter.put(
       if (!row) throw new HttpError(404, 'not_found', 'Schedule not found');
       res.json(ok(row));
     } catch (e: any) {
-      if (String(e?.message ?? e).includes('no_overlap')) {
-        return res.status(409).json(fail('overlap', 'Schedule dates overlap an existing schedule'));
+      // Postgres exclusion constraint (23P01) fires when the new schedule's
+      // date range overlaps an existing one for this customer. Drizzle wraps
+      // the postgres error so we check `.cause` and the message too.
+      const code = e?.code ?? e?.cause?.code;
+      const msg = String(e?.message ?? '') + ' ' + String(e?.cause?.message ?? '');
+      if (code === '23P01' || msg.includes('no_overlap') || msg.includes('exclusion')) {
+        return res.status(409).json(fail('overlap', 'Schedule dates overlap an existing schedule for this customer. Close the existing schedule (set its effective_to) before adding a new one.'));
       }
       throw e;
     }
