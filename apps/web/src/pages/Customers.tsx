@@ -220,6 +220,7 @@ function SchedulesTab({ customer }: { customer: Customer }) {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ['schedules', customer.id], queryFn: () => api.get<Schedule[]>(`/customers/${customer.id}/rate-schedules`) });
   const [editing, setEditing] = useState<string | null>(null);
+  const [editingDates, setEditingDates] = useState<Schedule | null>(null);
   const [creating, setCreating] = useState(false);
   if (editing) return <ScheduleEditor scheduleId={editing} onBack={() => { setEditing(null); qc.invalidateQueries({ queryKey: ['schedules', customer.id] }); }} customerId={customer.id} />;
   return (
@@ -230,13 +231,54 @@ function SchedulesTab({ customer }: { customer: Customer }) {
           {data.map((s) => (
             <div key={s.id} className="flex items-center justify-between rounded-lg border border-line p-3">
               <div><div className="font-medium">{s.name}</div><div className="text-xs text-muted">{s.effectiveFrom} → {s.effectiveTo ?? 'open'} · {s.lineCount} lines</div></div>
-              <button className="btn-ghost" onClick={() => setEditing(s.id)}>Edit rates</button>
+              <div className="flex gap-2">
+                <button className="btn-ghost" onClick={() => setEditingDates(s)}>Edit dates</button>
+                <button className="btn-ghost" onClick={() => setEditing(s.id)}>Edit rates</button>
+              </div>
             </div>
           ))}
         </div>
       )}
       {creating && <NewScheduleModal customer={customer} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); qc.invalidateQueries({ queryKey: ['schedules', customer.id] }); setEditing(id); }} />}
+      {editingDates && <EditScheduleDatesModal schedule={editingDates} onClose={() => setEditingDates(null)} onSaved={() => { setEditingDates(null); qc.invalidateQueries({ queryKey: ['schedules', customer.id] }); qc.invalidateQueries({ queryKey: ['all-schedules'] }); }} />}
     </div>
+  );
+}
+
+function EditScheduleDatesModal({ schedule, onClose, onSaved }: { schedule: Schedule; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(schedule.name);
+  const [effectiveFrom, setEffectiveFrom] = useState(schedule.effectiveFrom);
+  const [effectiveTo, setEffectiveTo] = useState(schedule.effectiveTo ?? '');
+  const m = useMutation({
+    mutationFn: () => api.put(`/rate-schedules/${schedule.id}`, {
+      name: name.trim() || schedule.name,
+      effective_from: effectiveFrom,
+      effective_to: effectiveTo || null,
+    }),
+    onSuccess: () => { toast('Schedule dates updated'); onSaved(); },
+    onError: (e: any) => toast(e.message, 'err'),
+  });
+  return (
+    <Modal open onClose={onClose} title={`Edit dates — ${schedule.name}`}>
+      <div className="space-y-3">
+        <div><label className="label">Name</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Effective from</label><input type="date" className="input" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} /></div>
+          <div>
+            <label className="label">Effective to <span className="text-muted">(blank = open)</span></label>
+            <input type="date" className="input" value={effectiveTo} onChange={(e) => setEffectiveTo(e.target.value)} />
+          </div>
+        </div>
+        <p className="text-xs text-muted">
+          Set an end date here to close out an open-ended schedule before you start a new one — that's how you avoid the
+          overlap error when adding a successor schedule.
+        </p>
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={() => m.mutate()} disabled={m.isPending}>Save</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

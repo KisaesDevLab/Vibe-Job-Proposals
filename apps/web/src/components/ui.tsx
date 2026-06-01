@@ -60,9 +60,38 @@ export function Badge({ status, children }: { status?: string; children?: ReactN
 }
 
 export function toast(msg: string, kind: 'ok' | 'err' = 'ok') {
+  // Errors stay long enough to read AND can be dismissed or copied. Success
+  // toasts keep the snappy 3.2s. Hover pauses the auto-dismiss timer.
   const el = document.createElement('div');
-  el.className = `fixed bottom-5 right-5 z-[100] rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-lg ${kind === 'ok' ? 'bg-green' : 'bg-red'}`;
-  el.textContent = msg;
+  el.className = `fixed bottom-5 right-5 z-[100] flex max-w-md items-start gap-3 rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-lg ${kind === 'ok' ? 'bg-green' : 'bg-red'}`;
+
+  const text = document.createElement('span');
+  text.textContent = msg;
+  text.className = 'flex-1 whitespace-pre-wrap break-words';
+  el.appendChild(text);
+
+  if (kind === 'err') {
+    const copy = document.createElement('button');
+    copy.textContent = 'Copy';
+    copy.className = 'rounded border border-white/40 px-1.5 py-0.5 text-xs hover:bg-white/10';
+    copy.title = 'Copy message';
+    copy.onclick = (e) => {
+      e.stopPropagation();
+      navigator.clipboard?.writeText(msg).then(() => { copy.textContent = 'Copied'; }).catch(() => { copy.textContent = 'Failed'; });
+    };
+    el.appendChild(copy);
+  }
+
+  const close = document.createElement('button');
+  close.textContent = '×';
+  close.className = 'text-lg leading-none opacity-80 hover:opacity-100';
+  close.title = 'Dismiss';
+  close.onclick = () => el.remove();
+  el.appendChild(close);
+
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3200);
+  const ttl = kind === 'err' ? 20000 : 3200;
+  let timer = window.setTimeout(() => el.remove(), ttl);
+  el.addEventListener('mouseenter', () => window.clearTimeout(timer));
+  el.addEventListener('mouseleave', () => { timer = window.setTimeout(() => el.remove(), 4000); });
 }
