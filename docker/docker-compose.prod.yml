@@ -49,7 +49,19 @@ services:
       timeout: 5s
       retries: 5
 
+  # Caddy + cloudflared are opt-in. Default `docker compose up -d` brings up
+  # only app + Postgres + Redis (LAN access on :3000). To enable the public
+  # tunnel workflow, run `docker compose --profile tunnel up -d` after
+  # provisioning a tunnel from Settings → Remote access. We gate these
+  # services because:
+  #   - Caddy's command points at /storage/caddy/Caddyfile which doesn't
+  #     exist until the api writes one during tunnel provisioning, so
+  #     auto-start would put Caddy in a restart loop on first install.
+  #   - cloudflared:latest is a scratch image with no /bin/sh, and the
+  #     entrypoint here uses a shell wrapper to read the token from the
+  #     shared volume — same boot loop on a fresh install.
   caddy:
+    profiles: ['tunnel']
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
@@ -70,6 +82,7 @@ services:
       retries: 5
 
   cloudflared:
+    profiles: ['tunnel']
     image: cloudflare/cloudflared:latest
     # No restart on boot — the api starts/restarts this container via the
     # Docker socket after writing /storage/cloudflared/tunnel.env. Reading
