@@ -15,7 +15,7 @@ import * as tar from 'tar';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
-const POSTGRES_CONTAINER = process.env.POSTGRES_CONTAINER ?? 'docker-postgres-1';
+const POSTGRES_CONTAINER_ENV = process.env.POSTGRES_CONTAINER ?? '';
 const PG_USER = process.env.PG_USER ?? 'postgres';
 const PG_DB = process.env.PG_DB ?? 'darrow_ti';
 
@@ -57,10 +57,51 @@ export function backupPath(filename: string): string {
   return join(backupsDir(), filename);
 }
 
+/** Resolve the Postgres container at call time. Lookup order:
+ *   1. POSTGRES_CONTAINER env var (explicit override)
+ *   2. Compose label `com.docker.compose.service=postgres` (any project)
+ *   3. Common defaults (darrow-postgres-1, docker-postgres-1)
+ *  Throws if nothing matches a running container, with a clear message. */
+async function resolvePostgresContainer(docker: Docker): Promise<Docker.Container> {
+  const tryNames: string[] = [];
+  if (POSTGRES_CONTAINER_ENV) tryNames.push(POSTGRES_CONTAINER_ENV);
+
+  // Find by compose service label first — works regardless of project name.
+  try {
+    const list = await docker.listContainers({
+      all: true,
+      filters: { label: ['com.docker.compose.service=postgres'] },
+    });
+    for (const c of list) {
+      const name = (c.Names?.[0] ?? '').replace(/^\//, '');
+      if (name) tryNames.push(name);
+    }
+  } catch { /* fall through */ }
+
+  // Fallback to historical defaults.
+  tryNames.push('darrow-postgres-1', 'docker-postgres-1');
+
+  // De-duplicate, then return the first one that actually exists + is running.
+  const seen = new Set<string>();
+  for (const name of tryNames) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    try {
+      const c = docker.getContainer(name);
+      const info = await c.inspect();
+      if (info.State?.Running) return c;
+    } catch { /* not found — try next */ }
+  }
+  throw new Error(
+    `Could not locate a running Postgres container. Tried: ${[...seen].join(', ')}. ` +
+    `Set POSTGRES_CONTAINER in the api env to override.`,
+  );
+}
+
 /** Run a command inside the postgres container and collect its stdout as a Buffer. */
 async function dockerExecCollect(cmd: string[]): Promise<Buffer> {
   const docker = new Docker();
-  const container = docker.getContainer(POSTGRES_CONTAINER);
+  const container = await resolvePostgresContainer(docker);
   const exec = await container.exec({ Cmd: cmd, AttachStdout: true, AttachStderr: true });
   const stream = await exec.start({ hijack: true, stdin: false });
   const stdoutChunks: Buffer[] = [];
@@ -86,7 +127,7 @@ async function dockerExecCollect(cmd: string[]): Promise<Buffer> {
 /** Pipe a Buffer into a command running inside the postgres container. */
 async function dockerExecStdin(cmd: string[], stdin: Buffer): Promise<void> {
   const docker = new Docker();
-  const container = docker.getContainer(POSTGRES_CONTAINER);
+  const container = await resolvePostgresContainer(docker);
   const exec = await container.exec({ Cmd: cmd, AttachStdin: true, AttachStdout: true, AttachStderr: true });
   const stream = await exec.start({ hijack: true, stdin: true });
   const stderr = new PassThrough();
