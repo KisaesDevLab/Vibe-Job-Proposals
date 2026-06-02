@@ -24,6 +24,7 @@ export function ImportPage() {
   const [type, setType] = useState<string>('expenses');
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [errorsOnly, setErrorsOnly] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const previewMutation = useMutation({
@@ -54,6 +55,10 @@ export function ImportPage() {
   const selected = types?.find((t) => t.value === type);
   const cleanCount = useMemo(() => preview ? preview.rows.filter((r) => !r._errors || r._errors.length === 0).length : 0, [preview]);
   const errCount = useMemo(() => preview ? preview.rows.filter((r) => r._errors && r._errors.length > 0).length : 0, [preview]);
+  const visibleRows = useMemo(() => {
+    if (!preview) return [];
+    return errorsOnly ? preview.rows.filter((r) => r._errors && r._errors.length > 0) : preview.rows;
+  }, [preview, errorsOnly]);
 
   // Column list for the preview table — prefer the type's canonical order,
   // fall back to keys actually present in the first row.
@@ -119,6 +124,18 @@ export function ImportPage() {
             <span className="text-muted">Sheet: <span className="font-mono">{preview.sheet_name}</span></span>
             <span><CheckCircle2 className="mr-1 inline text-finalized" size={14} />{cleanCount} valid</span>
             {errCount > 0 && <span className="text-red"><AlertTriangle className="mr-1 inline" size={14} />{errCount} with errors</span>}
+            <button
+              type="button"
+              disabled={errCount === 0}
+              onClick={() => setErrorsOnly((v) => !v)}
+              className={`ml-auto rounded-lg border px-3 py-1 text-xs font-medium transition ${
+                errorsOnly
+                  ? 'border-red bg-red text-white'
+                  : 'border-line text-muted hover:bg-paper'
+              } ${errCount === 0 ? 'cursor-not-allowed opacity-50' : ''}`}
+            >
+              {errorsOnly ? `Showing ${visibleRows.length} error rows — click to show all` : 'Show only rows with errors'}
+            </button>
           </div>
           <div className="card overflow-x-auto">
             <table className="w-full text-sm">
@@ -130,8 +147,14 @@ export function ImportPage() {
                 </tr>
               </thead>
               <tbody>
-                {preview.rows.map((r) => (
-                  <tr key={r._row} className={r._errors && r._errors.length > 0 ? 'bg-red-soft/50' : ''}>
+                {visibleRows.length === 0 ? (
+                  <tr><td className="td text-muted" colSpan={cols.length + 2}>{errorsOnly ? 'No rows with errors' : 'No rows'}</td></tr>
+                ) : visibleRows.map((r, i) => (
+                  // Weekly time-entries explode one sheet row into up to 7 daily
+                  // rows that share the same `_row` value — append the index to
+                  // keep React keys unique so the table doesn't keep stale DOM
+                  // when the filter shrinks the array.
+                  <tr key={`${r._row}-${i}`} className={r._errors && r._errors.length > 0 ? 'bg-red-soft/50' : ''}>
                     <td className="td text-muted">{r._row}</td>
                     {cols.map((c) => <td key={c} className="td">{r[c] == null ? '' : String(r[c])}</td>)}
                     <td className="td text-xs text-red">{r._errors?.join('; ') ?? ''}</td>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -6,9 +6,12 @@ import { formatMoney } from '@darrow/shared';
 import { PageHeader } from '@/components/Layout';
 import { Modal, Skeleton, Empty, Badge, toast } from '@/components/ui';
 import { SearchSelect } from '@/components/SearchSelect';
+import { SortableHeader, nextSort, compareValues, type SortState } from '@/components/SortableHeader';
 
 interface Level { id: string; name: string; }
 interface Employee { id: string; name: string; levelName: string; levelId: string; active: boolean; hireDate: string | null; notes: string | null; current_rate: { costSt: string; costOt: string; costDt: string } | null; }
+
+type SortKey = 'name' | 'level' | 'cost' | 'status';
 
 export function EmployeesPage() {
   const qc = useQueryClient();
@@ -17,6 +20,54 @@ export function EmployeesPage() {
   const [editing, setEditing] = useState<Employee | null>(null);
   const [rateFor, setRateFor] = useState<Employee | null>(null);
   const [levelFor, setLevelFor] = useState<Employee | null>(null);
+
+  // Filters
+  const [nameQ, setNameQ] = useState('');
+  const [levelF, setLevelF] = useState(''); // '' = all
+  const [statusF, setStatusF] = useState<'all' | 'active' | 'inactive'>('active');
+  const [costF, setCostF] = useState<'all' | 'set' | 'missing'>('all');
+  const [sort, setSort] = useState<SortState<SortKey>>({ key: 'name', dir: 'asc' });
+
+  // Unique levels from the current dataset for the dropdown
+  const levelOptions = useMemo(() => {
+    if (!data) return [];
+    const seen = new Set<string>();
+    const out: { value: string; label: string }[] = [];
+    for (const e of data) if (!seen.has(e.levelName)) { seen.add(e.levelName); out.push({ value: e.levelName, label: e.levelName }); }
+    return out.sort((a, b) => a.label.localeCompare(b.label));
+  }, [data]);
+
+  const filtered = useMemo(() => {
+    if (!data) return [];
+    const q = nameQ.trim().toLowerCase();
+    return data.filter((e) => {
+      if (q && !e.name.toLowerCase().includes(q)) return false;
+      if (levelF && e.levelName !== levelF) return false;
+      if (statusF === 'active' && !e.active) return false;
+      if (statusF === 'inactive' && e.active) return false;
+      const r = e.current_rate;
+      const hasCost = !!r && (Number(r.costSt) > 0 || Number(r.costOt) > 0 || Number(r.costDt) > 0);
+      if (costF === 'set' && !hasCost) return false;
+      if (costF === 'missing' && hasCost) return false;
+      return true;
+    });
+  }, [data, nameQ, levelF, statusF, costF]);
+
+  const sorted = useMemo(() => {
+    const rows = [...filtered];
+    rows.sort((a, b) => {
+      const k = sort.key;
+      if (k === 'name') return compareValues(a.name, b.name, sort.dir);
+      if (k === 'level') return compareValues(a.levelName, b.levelName, sort.dir);
+      if (k === 'status') return compareValues(a.active ? 0 : 1, b.active ? 0 : 1, sort.dir);
+      // cost = sum of ST+OT+DT for a stable numeric sort
+      const av = a.current_rate ? Number(a.current_rate.costSt) + Number(a.current_rate.costOt) + Number(a.current_rate.costDt) : -1;
+      const bv = b.current_rate ? Number(b.current_rate.costSt) + Number(b.current_rate.costOt) + Number(b.current_rate.costDt) : -1;
+      return compareValues(av, bv, sort.dir);
+    });
+    return rows;
+  }, [filtered, sort]);
+
   return (
     <div>
       <PageHeader title="Employees" subtitle="Active crew & effective-dated cost rates"
@@ -24,9 +75,32 @@ export function EmployeesPage() {
       {isLoading ? <Skeleton /> : !data?.length ? <Empty title="No employees yet" hint="Add your first employee" /> : (
         <div className="card overflow-hidden">
           <table className="w-full">
-            <thead><tr><th className="th">Name</th><th className="th">Level</th><th className="th">Cost ST/OT/DT</th><th className="th">Status</th><th className="th"></th></tr></thead>
+            <thead>
+              <tr>
+                <SortableHeader<SortKey> label="Name"  sortKey="name"   sort={sort} onSort={(k) => setSort((p) => nextSort(p, k))} />
+                <SortableHeader<SortKey> label="Level" sortKey="level"  sort={sort} onSort={(k) => setSort((p) => nextSort(p, k))} />
+                <SortableHeader<SortKey> label="Cost ST/OT/DT" sortKey="cost" sort={sort} onSort={(k) => setSort((p) => nextSort(p, k))} />
+                <SortableHeader<SortKey> label="Status" sortKey="status" sort={sort} onSort={(k) => setSort((p) => nextSort(p, k))} />
+                <th className="th"></th>
+              </tr>
+              <tr className="bg-paper/40">
+                <th className="th py-1.5"><input className="input" placeholder="Search name…" value={nameQ} onChange={(e) => setNameQ(e.target.value)} /></th>
+                <th className="th py-1.5">
+                  <SearchSelect value={levelF} onChange={setLevelF} options={[{ value: '', label: 'All levels' }, ...levelOptions]} placeholder="All levels" />
+                </th>
+                <th className="th py-1.5">
+                  <SearchSelect value={costF} onChange={(v) => setCostF(v as typeof costF)} options={[{ value: 'all', label: 'Any cost' }, { value: 'set', label: 'Has cost rate' }, { value: 'missing', label: 'Missing/zero' }]} />
+                </th>
+                <th className="th py-1.5">
+                  <SearchSelect value={statusF} onChange={(v) => setStatusF(v as typeof statusF)} options={[{ value: 'all', label: 'All' }, { value: 'active', label: 'Active only' }, { value: 'inactive', label: 'Inactive only' }]} />
+                </th>
+                <th className="th py-1.5 text-right text-xs text-muted">{sorted.length} of {data.length}</th>
+              </tr>
+            </thead>
             <tbody>
-              {data.map((e) => {
+              {sorted.length === 0 ? (
+                <tr><td className="td text-muted" colSpan={5}>No employees match the current filters</td></tr>
+              ) : sorted.map((e) => {
                 const r = e.current_rate;
                 const hasCost = r && (Number(r.costSt) > 0 || Number(r.costOt) > 0 || Number(r.costDt) > 0);
                 return (
