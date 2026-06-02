@@ -177,6 +177,18 @@ function Tunnel() {
     mutationFn: () => api.post<{ accounts: CfAccount[]; zones: CfZone[] }>('/settings/tunnel/verify', { api_token: token }),
     onSuccess: (data) => {
       setVerified(data);
+      // Surface zero-results clearly — the dropdown going empty is the most
+      // common "what happened" symptom. Cloudflare returns [] (not an error)
+      // when the token lacks Account Settings:Read / Zone:Read scopes.
+      if (data.accounts.length === 0 || data.zones.length === 0) {
+        toast(
+          `Token verified but returned ${data.accounts.length} account(s) and ${data.zones.length} zone(s). ` +
+          `The token needs Account.Account Settings:Read + Zone.Zone:Read scopes too. Regenerate at ` +
+          `https://dash.cloudflare.com/profile/api-tokens`,
+          'err',
+        );
+        return;
+      }
       toast(`Token OK — ${data.accounts.length} account(s), ${data.zones.length} zone(s)`);
       if (data.accounts.length === 1) setAccountId(data.accounts[0].id);
       if (data.zones.length === 1) { setZoneId(data.zones[0].id); }

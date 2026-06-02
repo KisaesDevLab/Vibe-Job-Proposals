@@ -8,6 +8,7 @@ import {
   Users,
   BarChart3,
   ShieldCheck,
+  UserCog,
   Settings as SettingsIcon,
   LogOut,
   Mail,
@@ -40,6 +41,7 @@ const NAV = [
     { to: '/reports', label: 'Reports', icon: BarChart3 },
     { to: '/readiness', label: 'Readiness', icon: ShieldCheck },
     { to: '/import', label: 'Import', icon: Upload },
+    { to: '/users', label: 'Users', icon: UserCog },
     { to: '/settings', label: 'Settings', icon: SettingsIcon },
   ] },
 ];

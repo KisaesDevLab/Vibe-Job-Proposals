@@ -29,6 +29,7 @@ import { ReportsPage } from './pages/Reports';
 import { ReadinessPage } from './pages/Readiness';
 import { ImportPage } from './pages/Import';
 import { SettingsPage } from './pages/Settings';
+import { UsersPage } from './pages/Users';
 
 // When any query or mutation hits a 401, the session has expired. Clear the
 // cache and bounce to /login so the user isn't stuck clicking Save on a dead
@@ -106,6 +107,7 @@ const reportsRoute = createRoute({ getParentRoute: () => appRoute, path: '/repor
 const readinessRoute = createRoute({ getParentRoute: () => appRoute, path: '/readiness', component: ReadinessPage });
 const importRoute = createRoute({ getParentRoute: () => appRoute, path: '/import', component: ImportPage });
 const settingsRoute = createRoute({ getParentRoute: () => appRoute, path: '/settings', component: SettingsPage });
+const usersRoute = createRoute({ getParentRoute: () => appRoute, path: '/users', component: UsersPage });
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -124,6 +126,7 @@ const routeTree = rootRoute.addChildren([
     readinessRoute,
     importRoute,
     settingsRoute,
+    usersRoute,
   ]),
 ]);
 

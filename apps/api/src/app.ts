@@ -26,6 +26,7 @@ import { invoicesRouter } from './routes/invoices.js';
 import { invoiceSummariesRouter } from './routes/invoice-summaries.js';
 import { importRouter } from './routes/import.js';
 import { reportsRouter } from './routes/reports.js';
+import { usersRouter } from './routes/users.js';
 
 export function createApp(): express.Express {
   const app = express();
@@ -129,6 +130,7 @@ export function createApp(): express.Express {
   app.use('/api/invoices', invoicesRouter);
   app.use('/api/invoice-summaries', invoiceSummariesRouter);
   app.use('/api/import', requireRole('admin', 'owner'), importRouter);
+  app.use('/api/users', requireRole('admin', 'owner'), usersRouter);
   app.use('/api/reports', reportsRouter);
 
   app.use('/api', (_req, res) => res.status(404).json(fail('not_found', 'Route not found')));
