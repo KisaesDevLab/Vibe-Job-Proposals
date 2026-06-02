@@ -79,7 +79,13 @@ export function createApp(): express.Express {
       cookie: {
         httpOnly: true,
         sameSite: 'lax',
-        secure: isProd,
+        // Tie `secure` to FORCE_HTTPS so plain-http LAN installs can hold a
+        // session. With `secure: true` on HTTP, browsers receive the
+        // Set-Cookie but refuse to send it back — login succeeds, /api/auth/me
+        // returns 401 on the very next request, and the global 401 handler
+        // logs the operator back out. Once Cloudflare Tunnel is in front,
+        // set FORCE_HTTPS=1 and the cookie becomes Secure again.
+        secure: forceHttps,
         maxAge: 14 * 24 * 60 * 60 * 1000,
       },
     }),
