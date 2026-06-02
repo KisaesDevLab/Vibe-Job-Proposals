@@ -148,7 +148,9 @@ function BillableByRange() {
   });
 
   const create = useMutation({
-    mutationFn: (job_id: string) => api.post<{ id: string }>('/invoices/draft', { job_id, through_date: to }),
+    // Scope the draft to the visible date range so a "May 1–15" selection
+    // doesn't pull in older unbilled entries the user can't see in the table.
+    mutationFn: (job_id: string) => api.post<{ id: string }>('/invoices/draft', { job_id, from_date: from, through_date: to }),
     onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['invoices'] }); qc.invalidateQueries({ queryKey: ['job-totals'] }); nav({ to: '/invoices/$id', params: { id: r.id } }); },
     onError: (e: any) => {
       if (e.code === 'draft_exists' && e.details?.invoice_id) nav({ to: '/invoices/$id', params: { id: e.details.invoice_id } });

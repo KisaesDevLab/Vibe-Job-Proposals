@@ -12,7 +12,7 @@
 
 import ExcelJS from 'exceljs';
 import { sql } from '@darrow/db';
-import { EXPENSE_CATEGORIES, type ExpenseCategory } from '@darrow/shared';
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS, type ExpenseCategory } from '@darrow/shared';
 import { writeAudit } from '../audit.js';
 
 export type ImportType = 'expenses' | 'customers' | 'jobs' | 'time-entries';
@@ -180,9 +180,15 @@ async function previewExpenses(buffer: Buffer): Promise<PreviewResult<ExpenseRow
     let category: ExpenseCategory | null = null;
     if (!categoryRaw) rowErrors.push('Category required');
     else {
-      // Accept either an enum value or its display label.
+      // Accept either an enum value ("materials") or its display label
+      // ("Materials & Parts"). Normalize both sides to alpha-only lowercase
+      // so spaces, ampersands, and underscores don't trip the match.
       const norm = categoryRaw.replace(/[^a-z]/g, '');
-      const match = (EXPENSE_CATEGORIES as readonly string[]).find((c) => c.replace(/_/g, '') === norm);
+      const match = (EXPENSE_CATEGORIES as readonly string[]).find((c) => {
+        if (c.replace(/_/g, '') === norm) return true;
+        const label = EXPENSE_CATEGORY_LABELS[c as ExpenseCategory].toLowerCase().replace(/[^a-z]/g, '');
+        return label === norm;
+      });
       if (match) category = match as ExpenseCategory;
       else rowErrors.push(`Unknown category "${categoryRaw}"`);
     }
@@ -195,10 +201,12 @@ async function previewExpenses(buffer: Buffer): Promise<PreviewResult<ExpenseRow
       vendor,
       reference,
       category: category ?? ('materials' as ExpenseCategory),
-      // Preserve sign so refunds/credits (negative) survive the round-trip.
-      // Operators see the value in the preview and can fix wrong-signed
-      // rows there before commit.
-      amount: amount ?? 0,
+      // Accounting exports (AW, QuickBooks, etc.) record expenses as negative
+      // amounts ("money out"). The expenses table stores positive magnitudes
+      // and has a CHECK (amount > 0) constraint, so absolute-value on import.
+      // Refunds/credits aren't currently a domain concept; if they become one
+      // we'd add a sign column rather than allow negatives here.
+      amount: amount != null ? Math.abs(amount) : 0,
       description,
       job_code,
       _errors: rowErrors.length ? rowErrors : undefined,

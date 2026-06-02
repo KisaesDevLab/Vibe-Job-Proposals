@@ -70,10 +70,21 @@ employeesRouter.post(
     const body = employeeSchema.parse(req.body);
     const [lvl] = await db.select().from(rateLevels).where(eq(rateLevels.id, body.level_id));
     if (!lvl || !lvl.active) return res.status(400).json(fail('bad_level', 'Rate level not found or inactive'));
-    const [row] = await db
-      .insert(employees)
-      .values({ name: body.name, levelId: body.level_id, active: body.active ?? true, hireDate: body.hire_date ?? null, notes: body.notes ?? null })
-      .returning();
+    // Seed both the employee row and an open-ended `employee_levels` history
+    // row covering all time. The pricing engine resolves bill rates by joining
+    // employee_levels against time_entries.work_date; without this floor row
+    // every JOIN fails and labor lines render at $0. Mirrors the backfill
+    // migration 0019_backfill_level_floor.sql.
+    const row = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(employees)
+        .values({ name: body.name, levelId: body.level_id, active: body.active ?? true, hireDate: body.hire_date ?? null, notes: body.notes ?? null })
+        .returning();
+      await tx
+        .insert(employeeLevels)
+        .values({ employeeId: created.id, levelId: body.level_id, effectiveFrom: '1900-01-01' });
+      return created;
+    });
     await writeAudit({ userId: req.user?.id, entityType: 'employee', entityId: row.id, action: 'create', summary: `Created employee ${row.name}` });
     res.status(201).json(ok(row));
   }),

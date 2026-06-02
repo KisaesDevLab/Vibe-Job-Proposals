@@ -149,6 +149,10 @@ export const expenseSchema = z.object({
 export const invoiceDraftSchema = z.object({
   job_id: z.string().uuid(),
   through_date: dateStr,
+  // Optional lower bound — when set, only entries with work_date >= from_date
+  // are auto-bound to the draft. Used by the "Billable by date range" flow so
+  // a May 1–15 selection doesn't pull in January's unbilled entries.
+  from_date: dateStr.optional(),
 });
 
 export const invoiceUpdateSchema = z.object({

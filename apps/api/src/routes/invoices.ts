@@ -46,16 +46,29 @@ invoicesRouter.post(
     if (body.through_date > new Date().toISOString().slice(0, 10)) {
       return res.status(400).json(fail('future_date', 'through_date cannot be in the future'));
     }
+    if (body.from_date && body.from_date > body.through_date) {
+      return res.status(400).json(fail('bad_range', 'from_date must be on or before through_date'));
+    }
     // one draft per job
     const existing = await db.select().from(invoices).where(and(eq(invoices.jobId, body.job_id), eq(invoices.status, 'draft')));
     if (existing.length) return res.status(409).json(fail('draft_exists', 'A draft already exists for this job', { invoice_id: existing[0].id }));
+    const from = body.from_date ?? null;
     const result = await rawsql.begin(async (tx: any) => {
       const [inv] = await tx`INSERT INTO invoices (job_id, through_date, created_by_user_id, status) VALUES (${body.job_id}, ${body.through_date}::date, ${req.user?.id ?? null}, 'draft') RETURNING *`;
-      await tx`UPDATE time_entries SET invoice_id=${inv.id} WHERE job_id=${body.job_id} AND invoice_id IS NULL AND work_date <= ${body.through_date}::date`;
-      await tx`UPDATE expenses SET invoice_id=${inv.id} WHERE job_id=${body.job_id} AND invoice_id IS NULL AND work_date <= ${body.through_date}::date`;
+      // When from_date is provided, scope auto-bind to [from_date, through_date].
+      // Otherwise behave as before — every unbilled entry on or before
+      // through_date binds (the "bill everything up to here" semantics).
+      await tx`UPDATE time_entries SET invoice_id=${inv.id}
+        WHERE job_id=${body.job_id} AND invoice_id IS NULL
+          AND work_date <= ${body.through_date}::date
+          AND (${from}::date IS NULL OR work_date >= ${from}::date)`;
+      await tx`UPDATE expenses SET invoice_id=${inv.id}
+        WHERE job_id=${body.job_id} AND invoice_id IS NULL
+          AND work_date <= ${body.through_date}::date
+          AND (${from}::date IS NULL OR work_date >= ${from}::date)`;
       return inv;
     });
-    await writeAudit({ userId: req.user?.id, entityType: 'invoice', entityId: result.id, action: 'create', summary: `Created draft for job` });
+    await writeAudit({ userId: req.user?.id, entityType: 'invoice', entityId: result.id, action: 'create', summary: `Created draft for job${from ? ` (${from} → ${body.through_date})` : ''}` });
     res.status(201).json(ok(result));
   }),
 );

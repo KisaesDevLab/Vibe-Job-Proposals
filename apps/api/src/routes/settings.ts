@@ -321,3 +321,76 @@ settingsRouter.post(
     res.json(ok({ disabled: true }));
   }),
 );
+
+// ─── Backup & Restore ──────────────────────────────────────────────────────
+import { createBackup, listBackups, deleteBackup, backupPath, restoreBackup } from '../services/backup.js';
+import { createReadStream, statSync } from 'node:fs';
+import { writeFile as writeFileAsync, mkdir as mkdirAsync } from 'node:fs/promises';
+import { join as joinPath } from 'node:path';
+
+settingsRouter.get(
+  '/backups',
+  ah(async (_req, res) => {
+    const list = await listBackups();
+    res.json(ok(list));
+  }),
+);
+
+settingsRouter.post(
+  '/backups',
+  ah(async (req: AuthedRequest, res) => {
+    const result = await createBackup();
+    await writeAudit({ userId: req.user?.id, entityType: 'settings', entityId: '1', action: 'export', summary: `Created backup ${result.filename}` });
+    res.status(201).json(ok(result));
+  }),
+);
+
+settingsRouter.get(
+  '/backups/:filename/download',
+  ah(async (req, res) => {
+    const p = backupPath(req.params.filename);
+    if (!existsSync(p)) throw new HttpError(404, 'not_found', 'Backup not found');
+    const st = statSync(p);
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Length', String(st.size));
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.filename}"`);
+    createReadStream(p).pipe(res);
+  }),
+);
+
+settingsRouter.delete(
+  '/backups/:filename',
+  ah(async (req: AuthedRequest, res) => {
+    await deleteBackup(req.params.filename);
+    await writeAudit({ userId: req.user?.id, entityType: 'settings', entityId: '1', action: 'delete', summary: `Deleted backup ${req.params.filename}` });
+    res.json(ok({ deleted: true }));
+  }),
+);
+
+const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+
+settingsRouter.post(
+  '/restore',
+  restoreUpload.single('file'),
+  ah(async (req: AuthedRequest, res) => {
+    if (!req.file) throw new HttpError(400, 'no_file', 'No backup file uploaded');
+    const confirm = String(req.body?.confirm ?? '');
+    if (confirm !== 'REPLACE ALL DATA') {
+      return res.status(400).json(fail('not_confirmed', 'Restore requires confirm="REPLACE ALL DATA"'));
+    }
+    // Stash the upload to a temp path before restoring (tar lib reads from disk).
+    const { tmpdir } = await import('node:os');
+    const tmp = joinPath(tmpdir(), `darrow-restore-${Date.now()}.tar.gz`);
+    await mkdirAsync(joinPath(tmpdir()), { recursive: true }).catch(() => {});
+    await writeFileAsync(tmp, req.file.buffer);
+    try {
+      await restoreBackup(tmp);
+      await writeAudit({ userId: req.user?.id, entityType: 'settings', entityId: '1', action: 'import', summary: `Restored from backup ${req.file.originalname}` });
+      res.json(ok({ restored: true }));
+    } catch (err: any) {
+      throw new HttpError(500, 'restore_failed', err?.message ?? String(err));
+    } finally {
+      await import('node:fs/promises').then((m) => m.rm(tmp, { force: true })).catch(() => {});
+    }
+  }),
+);

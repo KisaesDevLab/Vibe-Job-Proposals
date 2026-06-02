@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { ArrowLeft, Download, FileText, Ban, RefreshCw, Mail, Package } from 'lucide-react';
+import { ArrowLeft, Download, FileText, Ban, RefreshCw, Mail, Package, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatMoney } from '@darrow/shared';
 import { Skeleton, Badge, Modal, toast } from '@/components/ui';
@@ -36,6 +36,16 @@ export function InvoiceDetailPage({ id }: { id: string }) {
     onSuccess: () => { toast('Regenerating'); qc.invalidateQueries({ queryKey: ['invoice', id] }); },
     onError: (e: any) => toast(e.message ?? String(e), 'err'),
   });
+  const discard = useMutation({
+    mutationFn: () => api.del(`/invoices/${id}`),
+    onSuccess: () => {
+      toast('Draft discarded — time & expenses are unbilled again');
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+      qc.invalidateQueries({ queryKey: ['job-totals'] });
+      nav({ to: '/invoices' });
+    },
+    onError: (e: any) => toast(e.message ?? String(e), 'err'),
+  });
 
   if (isLoading) return <Skeleton rows={8} />;
   const inv = data.invoice;
@@ -53,7 +63,21 @@ export function InvoiceDetailPage({ id }: { id: string }) {
           <p className="mt-1 text-sm text-muted">{inv.job_code} · {inv.customer_name} · through {inv.through_date}</p>
         </div>
         <div className="flex gap-2">
-          {isDraft && <button className="btn-primary" onClick={() => finalize.mutate()} disabled={finalize.isPending || (data.preview?.blockers?.length > 0)}>Finalize</button>}
+          {isDraft && (
+            <>
+              <button
+                className="btn-ghost text-red"
+                onClick={() => {
+                  if (confirm('Discard this draft? Time entries and expenses will become unbilled again. This cannot be undone.')) discard.mutate();
+                }}
+                disabled={discard.isPending}
+                title="Discard draft — unbinds entries and deletes the draft"
+              >
+                <Trash2 size={15} /> Discard draft
+              </button>
+              <button className="btn-primary" onClick={() => finalize.mutate()} disabled={finalize.isPending || (data.preview?.blockers?.length > 0)}>Finalize</button>
+            </>
+          )}
           {!isDraft && inv.status !== 'void' && (
             <>
               <a className="btn-ghost" href={`/api/invoices/${id}/docx`}><FileText size={15} /> DOCX</a>

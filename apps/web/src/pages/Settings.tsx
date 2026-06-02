@@ -9,20 +9,22 @@ import { SearchSelect } from '@/components/SearchSelect';
 export function SettingsPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['settings'], queryFn: () => api.get<any>('/settings') });
-  const [tab, setTab] = useState<'company' | 'branding' | 'markups' | 'tunnel'>('company');
+  const [tab, setTab] = useState<'company' | 'branding' | 'markups' | 'tunnel' | 'backup'>('company');
   if (isLoading) return <div><PageHeader title="Settings" /><Skeleton /></div>;
+  const tabLabel = (t: string) => t === 'tunnel' ? 'Remote access' : t === 'backup' ? 'Backup & restore' : t;
   return (
     <div>
-      <PageHeader title="Settings" subtitle="Company, branding, markups & remote access" />
+      <PageHeader title="Settings" subtitle="Company, branding, markups, remote access & backup" />
       <div className="mb-5 flex gap-2 border-b border-line">
-        {(['company', 'branding', 'markups', 'tunnel'] as const).map((t) => (
-          <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm font-medium capitalize ${tab === t ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>{t === 'tunnel' ? 'Remote access' : t}</button>
+        {(['company', 'branding', 'markups', 'tunnel', 'backup'] as const).map((t) => (
+          <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm font-medium capitalize ${tab === t ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>{tabLabel(t)}</button>
         ))}
       </div>
       {tab === 'company' && <Company data={data} onSaved={() => qc.invalidateQueries({ queryKey: ['settings'] })} />}
       {tab === 'branding' && <Branding data={data} onSaved={() => qc.invalidateQueries({ queryKey: ['settings'] })} />}
       {tab === 'markups' && <Markups data={data} onSaved={() => qc.invalidateQueries({ queryKey: ['settings'] })} />}
       {tab === 'tunnel' && <Tunnel />}
+      {tab === 'backup' && <BackupRestore />}
     </div>
   );
 }
@@ -289,6 +291,150 @@ function Tunnel() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+interface BackupRow { filename: string; size_bytes: number; created_at: string; }
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function BackupRestore() {
+  const qc = useQueryClient();
+  const { data: backups, isLoading } = useQuery({ queryKey: ['backups'], queryFn: () => api.get<BackupRow[]>('/settings/backups') });
+  const createMut = useMutation({
+    mutationFn: () => api.post<BackupRow>('/settings/backups'),
+    onSuccess: (r) => { toast(`Created ${r.filename}`); qc.invalidateQueries({ queryKey: ['backups'] }); },
+    onError: (e: any) => toast(e.message ?? String(e), 'err'),
+  });
+  const deleteMut = useMutation({
+    mutationFn: (filename: string) => api.del(`/settings/backups/${encodeURIComponent(filename)}`),
+    onSuccess: () => { toast('Deleted'); qc.invalidateQueries({ queryKey: ['backups'] }); },
+    onError: (e: any) => toast(e.message ?? String(e), 'err'),
+  });
+
+  const [restoring, setRestoring] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const restoreMut = useMutation({
+    mutationFn: async () => {
+      if (!restoreFile) throw new Error('Pick a backup file first');
+      const fd = new FormData();
+      fd.append('file', restoreFile);
+      fd.append('confirm', confirmText);
+      // Direct fetch — api.upload only attaches the file field, no extra body.
+      const res = await fetch('/api/settings/restore', { method: 'POST', headers: { 'X-Requested-With': 'darrow' }, body: fd, credentials: 'same-origin' });
+      const json = await res.json();
+      if (!res.ok || json.ok === false) throw new Error(json?.error?.message ?? 'Restore failed');
+      return json.data;
+    },
+    onSuccess: () => {
+      toast('Restored — reloading');
+      setRestoring(false);
+      setRestoreFile(null);
+      setConfirmText('');
+      setTimeout(() => window.location.assign('/login'), 800);
+    },
+    onError: (e: any) => toast(e.message ?? String(e), 'err'),
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="card max-w-3xl space-y-4 p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Backups</h3>
+            <p className="text-xs text-muted">Each backup is a single .tar.gz containing a pg_dump of the database and a snapshot of the storage tree (PDFs, attachments, logo, template). Backups live under <code className="rounded bg-paper px-1">storage/backups/</code>.</p>
+          </div>
+          <button className="btn-primary shrink-0" onClick={() => createMut.mutate()} disabled={createMut.isPending}>
+            {createMut.isPending ? 'Backing up…' : 'Create backup now'}
+          </button>
+        </div>
+        {isLoading ? <Skeleton rows={3} /> : (backups ?? []).length === 0 ? (
+          <p className="text-sm text-muted">No backups yet. Click "Create backup now" to make one.</p>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-line">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-paper/60">
+                  <th className="th">Filename</th>
+                  <th className="th text-right">Size</th>
+                  <th className="th">Created</th>
+                  <th className="th"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {backups!.map((b) => (
+                  <tr key={b.filename}>
+                    <td className="td font-mono text-xs">{b.filename}</td>
+                    <td className="td text-right">{fmtBytes(b.size_bytes)}</td>
+                    <td className="td">{new Date(b.created_at).toLocaleString()}</td>
+                    <td className="td text-right">
+                      <a className="btn-ghost" href={`/api/settings/backups/${encodeURIComponent(b.filename)}/download`}>Download</a>
+                      <button
+                        className="btn-ghost ml-1 text-red"
+                        onClick={() => {
+                          if (confirm(`Delete ${b.filename}?`)) deleteMut.mutate(b.filename);
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="card max-w-3xl space-y-3 border-red/40 p-5">
+        <h3 className="font-semibold text-red">Restore from backup</h3>
+        <p className="text-xs text-muted">
+          Restoring <strong>replaces every row in the database</strong> and overwrites the storage tree
+          (except the backups directory) with the contents of the archive. You will be logged out.
+        </p>
+        {!restoring ? (
+          <button className="btn-danger" onClick={() => setRestoring(true)}>Restore from file…</button>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <label className="label">Backup archive (.tar.gz)</label>
+              <input
+                type="file"
+                accept=".gz,.tar.gz,application/gzip"
+                onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)}
+                className="text-sm"
+              />
+              {restoreFile && <p className="mt-1 text-xs text-muted">{restoreFile.name} · {fmtBytes(restoreFile.size)}</p>}
+            </div>
+            <div>
+              <label className="label">Type <code className="rounded bg-paper px-1">REPLACE ALL DATA</code> to confirm</label>
+              <input
+                className="input"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="REPLACE ALL DATA"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                className="btn-danger"
+                onClick={() => restoreMut.mutate()}
+                disabled={!restoreFile || confirmText !== 'REPLACE ALL DATA' || restoreMut.isPending}
+              >
+                {restoreMut.isPending ? 'Restoring…' : 'Restore now'}
+              </button>
+              <button className="btn-ghost" onClick={() => { setRestoring(false); setRestoreFile(null); setConfirmText(''); }} disabled={restoreMut.isPending}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
