@@ -8,7 +8,7 @@ import * as React from 'react';
 import { Document, Page, Text, View, StyleSheet, Font } from '@react-pdf/renderer';
 void React;
 import { formatMoney, EXPENSE_CATEGORY_LABELS, type ExpenseCategory } from '@darrow/shared';
-import type { PackageData, DailyGridRow } from './package-data.js';
+import type { PackageData } from './package-data.js';
 
 Font.registerHyphenationCallback((w) => [w]); // disable hyphenation
 
@@ -108,6 +108,17 @@ function ProposalPage({ d, pageCount }: { d: PackageData; pageCount: number }) {
         </View>
       </View>
 
+      {/* Job description — one line under Bill # with breathing room before
+          the Bill To / Job # block below. Right-aligned (marginLeft: auto +
+          width 280) so its "Description:" label lines up with the left edge
+          of the Job # / PO # / Customer # table that follows. */}
+      {inv.job?.description ? (
+        <View style={{ flexDirection: 'row', marginLeft: 'auto', width: 280, marginBottom: 10 }}>
+          <Text style={[s.metaLabel, { width: 70 }]}>Description:</Text>
+          <Text style={{ flex: 1 }}>{inv.job.description}</Text>
+        </View>
+      ) : null}
+
       {/* Bill To + Job/PO/Customer */}
       <View style={s.metaRow}>
         <View style={s.billTo}>
@@ -188,15 +199,15 @@ function ProposalPage({ d, pageCount }: { d: PackageData; pageCount: number }) {
             <View key={`cat-${i}`}>
               <View style={s.tr}>
                 <Text style={[s.td, { width: '50%' }]}>{cat.label}</Text>
-                <Text style={[s.td, { width: '17%', textAlign: 'right' }]}>{cat.amount.toFixed(2)}</Text>
+                <Text style={[s.td, { width: '17%', textAlign: 'right' }]}>{stripDollar(cat.amount)}</Text>
                 <Text style={[s.td, { width: '17%' }]}> </Text>
-                <Text style={[s.td, { width: '16%', borderRightWidth: 0, textAlign: 'right' }]}>{cat.amount.toFixed(2)}</Text>
+                <Text style={[s.td, { width: '16%', borderRightWidth: 0, textAlign: 'right' }]}>{stripDollar(cat.amount)}</Text>
               </View>
               {mk && (
                 <View style={s.tr}>
                   <Text style={[s.td, { width: '50%' }]}>{mk.percent_label} Markup on {cat.label}</Text>
                   <Text style={[s.td, { width: '17%', textAlign: 'right' }]}>{mk.percent_label}</Text>
-                  <Text style={[s.td, { width: '17%', textAlign: 'right' }]}>{cat.amount.toFixed(2)}</Text>
+                  <Text style={[s.td, { width: '17%', textAlign: 'right' }]}>{stripDollar(cat.amount)}</Text>
                   <Text style={[s.td, { width: '16%', borderRightWidth: 0, textAlign: 'right' }]}>{stripDollar(mk.amount)}</Text>
                 </View>
               )}
@@ -278,8 +289,16 @@ function aggregateLabor(rows: any[]): LaborRow[] {
     || num(a.rate) - num(b.rate),
   );
 }
-function stripDollar(v: string | undefined): string {
-  return String(v ?? '').replace(/^\$/, '');
+// Render any monetary input (already-formatted "$1,234.56" or a raw number
+// like "1234.56") as "1,234.56" with thousands separators. aggregateLabor
+// emits raw .toFixed(2) strings without commas, so we always reparse and
+// reformat here rather than just stripping the leading dollar.
+const NUM_FMT = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function stripDollar(v: string | number | undefined): string {
+  if (v == null || v === '') return '';
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[$,]/g, ''));
+  if (!isFinite(n)) return '';
+  return NUM_FMT.format(n);
 }
 function laborHoursTotal(labor: any[]): number {
   return labor.reduce((a, l) => a + Number(l.hours || 0), 0);
@@ -299,7 +318,7 @@ function EmployeeHoursPage({ d }: { d: PackageData }) {
   // Label distinguishes it from any real-labor row the same employee may have
   // on this invoice (e.g., the foreman is overhead AND worked real ST hours).
   const rows = d.overhead
-    ? [...d.employeeHours, { employeeName: `${d.overhead.employeeName} — Overhead`, st: d.overhead.hours, ot: 0, dt: 0 }]
+    ? [...d.employeeHours, { employeeName: d.overhead.employeeName, st: d.overhead.hours, ot: 0, dt: 0 }]
     : d.employeeHours;
   const totals = rows.reduce(
     (a, r) => ({ st: a.st + r.st, ot: a.ot + r.ot, dt: a.dt + r.dt }),
@@ -344,14 +363,36 @@ const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Satu
 const TIER_SUFFIX = ['1X', '1.5X', '2X'];
 
 function WeeklyGridPage({ d }: { d: PackageData }) {
-  // Group rows: jobCode → billedRef → workDate → employeeName
-  const byJob = new Map<string, Map<string, Map<string, Map<string, DailyGridRow>>>>();
+  // Group rows: jobCode → billedRef → weekStart (Mon) → employeeName → aggregated
+  // weekly bucket. Each bucket holds the 7 day-of-week hour values (by tier)
+  // plus that employee's week-total labor $.
+  type DayBucket = { st: number; ot: number; dt: number };
+  type EmpWeek = { byDow: Map<number, DayBucket>; laborAmount: number; st: number; ot: number; dt: number };
+  const newEmpWeek = (): EmpWeek => ({ byDow: new Map(), laborAmount: 0, st: 0, ot: 0, dt: 0 });
+  const mondayOf = (yyyymmdd: string): string => {
+    const dt = new Date(yyyymmdd + 'T00:00:00Z');
+    const dow = (dt.getUTCDay() + 6) % 7; // Mon = 0
+    dt.setUTCDate(dt.getUTCDate() - dow);
+    return dt.toISOString().slice(0, 10);
+  };
+  const byJob = new Map<string, Map<string, Map<string, Map<string, EmpWeek>>>>();
   for (const r of d.dailyGrid) {
+    const week = mondayOf(r.workDate);
     const j = byJob.get(r.jobCode) ?? new Map();
     const b = j.get(r.billedRef) ?? new Map();
-    const dt = b.get(r.workDate) ?? new Map();
-    dt.set(r.employeeName, r);
-    b.set(r.workDate, dt);
+    const w = b.get(week) ?? new Map();
+    const emp = w.get(r.employeeName) ?? newEmpWeek();
+    const day = emp.byDow.get(r.dow) ?? { st: 0, ot: 0, dt: 0 };
+    day.st += r.st;
+    day.ot += r.ot;
+    day.dt += r.dt;
+    emp.byDow.set(r.dow, day);
+    emp.st += r.st;
+    emp.ot += r.ot;
+    emp.dt += r.dt;
+    emp.laborAmount += r.laborAmount;
+    w.set(r.employeeName, emp);
+    b.set(week, w);
     j.set(r.billedRef, b);
     byJob.set(r.jobCode, j);
   }
@@ -409,67 +450,144 @@ function WeeklyGridPage({ d }: { d: PackageData }) {
         <Text style={{ width: summaryW, padding: 2, fontSize: 7, color: colors.excelHeaderText, textAlign: 'center' }}>Hours</Text>
       </View>
 
-      {/* Body — single job per invoice. The job-code banner row is omitted (it
-          duplicates info already on the cover); we keep the billed-ref banner
-          only as a visual separator above the daily rows. */}
+      {/* Body — one banner row per week (Monday-anchored), then one row per
+          employee in that week showing the full Mon→Sun hours across the 21
+          day/tier cells. Aggregated across the week, so a single employee
+          working 5 days shows up as one row, not five. */}
       {[...byJob.entries()].map(([jobCode, byBilled]) => (
         <View key={jobCode}>
-          {[...byBilled.entries()].map(([billed, byDate]) => (
+          {[...byBilled.entries()].map(([billed, byWeek]) => (
             <View key={billed}>
               <View style={[s.excelBand, { flexDirection: 'row' }]}>
                 <Text style={{ width: labelW, padding: 2 }}>{billed}</Text>
                 <View style={{ flex: 1 }} />
               </View>
-              {[...byDate.entries()].map(([date, byEmp]) => (
-                <View key={date}>
-                  <View style={{ flexDirection: 'row', borderBottomWidth: 0.25, borderColor: colors.thinLine }}>
-                    <Text style={{ width: labelW, padding: 1, paddingLeft: 8 }}>{date}</Text>
-                    <Text style={{ width: totalW, padding: 1, textAlign: 'right', borderRightWidth: 1, borderColor: colors.line }}> </Text>
-                    {Array.from({ length: 21 }).map((_, idx) => empty(`date-empty-${date}-${idx}`))}
-                    <Text style={{ width: summaryW, padding: 1 }}> </Text>
-                    <Text style={{ width: summaryW, padding: 1 }}> </Text>
-                    <Text style={{ width: summaryW, padding: 1 }}> </Text>
-                    <Text style={{ width: summaryW, padding: 1 }}> </Text>
-                  </View>
-                  {[...byEmp.values()].map((r) => (
-                    <View key={r.employeeName + date} style={{ flexDirection: 'row', borderBottomWidth: 0.25, borderColor: colors.thinLine }}>
-                      <Text style={{ width: labelW, padding: 1, paddingLeft: 16 }}>{r.employeeName}</Text>
-                      <Text style={{ width: totalW, padding: 1, textAlign: 'right', borderRightWidth: 1, borderColor: colors.line }}>{dollarFor(r.laborAmount) || ' '}</Text>
+              {[...byWeek.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([week, byEmp]) => {
+                // Aggregate the week's totals across every employee: per-day
+                // (Mon..Sun × ST/OT/DT) so the cells in the totals row show
+                // sums, plus the right-hand ST/OT/DT/Total summary columns
+                // and the Total Labor $ column.
+                const wkTotals = { st: 0, ot: 0, dt: 0, dollar: 0 };
+                const wkByDow = new Map<number, DayBucket>();
+                for (const emp of byEmp.values()) {
+                  wkTotals.st += emp.st;
+                  wkTotals.ot += emp.ot;
+                  wkTotals.dt += emp.dt;
+                  wkTotals.dollar += emp.laborAmount;
+                  for (const [dow, day] of emp.byDow.entries()) {
+                    const cur = wkByDow.get(dow) ?? { st: 0, ot: 0, dt: 0 };
+                    cur.st += day.st;
+                    cur.ot += day.ot;
+                    cur.dt += day.dt;
+                    wkByDow.set(dow, cur);
+                  }
+                }
+                return (
+                  <View key={week}>
+                    <View style={{ flexDirection: 'row', borderBottomWidth: 0.25, borderColor: colors.thinLine, backgroundColor: colors.excelBand }}>
+                      <Text style={{ width: labelW, padding: 1, paddingLeft: 8, fontFamily: 'Helvetica-Bold' }}>Week of {week}</Text>
+                      <Text style={{ width: totalW, padding: 1, textAlign: 'right', borderRightWidth: 1, borderColor: colors.line }}> </Text>
+                      {Array.from({ length: 21 }).map((_, idx) => empty(`wk-empty-${week}-${idx}`))}
+                      <Text style={{ width: summaryW, padding: 1 }}> </Text>
+                      <Text style={{ width: summaryW, padding: 1 }}> </Text>
+                      <Text style={{ width: summaryW, padding: 1 }}> </Text>
+                      <Text style={{ width: summaryW, padding: 1 }}> </Text>
+                    </View>
+                    {[...byEmp.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([empName, emp]) => (
+                      <View key={empName + week} style={{ flexDirection: 'row', borderBottomWidth: 0.25, borderColor: colors.thinLine }}>
+                        <Text style={{ width: labelW, padding: 1, paddingLeft: 16 }}>{empName}</Text>
+                        <Text style={{ width: totalW, padding: 1, textAlign: 'right', borderRightWidth: 1, borderColor: colors.line }}>{dollarFor(emp.laborAmount) || ' '}</Text>
+                        {Array.from({ length: 21 }).map((_, idx) => {
+                          const dayIdx = Math.floor(idx / 3);
+                          const tierIdx = idx % 3;
+                          const day = emp.byDow.get(dayIdx);
+                          if (!day) return empty(`emp-empty-${empName}-${week}-${idx}`);
+                          const val = tierIdx === 0 ? day.st : tierIdx === 1 ? day.ot : day.dt;
+                          return cell(`emp-cell-${empName}-${week}-${idx}`, val);
+                        })}
+                        <Text style={{ width: summaryW, padding: 1, textAlign: 'right' }}>{emp.st || ' '}</Text>
+                        <Text style={{ width: summaryW, padding: 1, textAlign: 'right' }}>{emp.ot || ' '}</Text>
+                        <Text style={{ width: summaryW, padding: 1, textAlign: 'right' }}>{emp.dt || ' '}</Text>
+                        <Text style={{ width: summaryW, padding: 1, textAlign: 'right' }}>{emp.st + emp.ot + emp.dt || ' '}</Text>
+                      </View>
+                    ))}
+                    {/* Week subtotal — sums across all employees in this week */}
+                    <View style={{ flexDirection: 'row', borderTopWidth: 0.5, borderBottomWidth: 0.5, borderColor: colors.line, backgroundColor: colors.excelSubtotal }}>
+                      <Text style={{ width: labelW, padding: 1, paddingLeft: 16, fontFamily: 'Helvetica-Bold' }}>Week total</Text>
+                      <Text style={{ width: totalW, padding: 1, textAlign: 'right', fontFamily: 'Helvetica-Bold', borderRightWidth: 1, borderColor: colors.line }}>{dollarFor(wkTotals.dollar) || ' '}</Text>
                       {Array.from({ length: 21 }).map((_, idx) => {
                         const dayIdx = Math.floor(idx / 3);
                         const tierIdx = idx % 3;
-                        if (dayIdx !== r.dow) return empty(`emp-empty-${r.employeeName}-${date}-${idx}`);
-                        const val = tierIdx === 0 ? r.st : tierIdx === 1 ? r.ot : r.dt;
-                        return cell(`emp-cell-${r.employeeName}-${date}-${idx}`, val);
+                        const day = wkByDow.get(dayIdx);
+                        if (!day) return empty(`wk-tot-empty-${week}-${idx}`);
+                        const val = tierIdx === 0 ? day.st : tierIdx === 1 ? day.ot : day.dt;
+                        return cell(`wk-tot-${week}-${idx}`, val);
                       })}
-                      <Text style={{ width: summaryW, padding: 1, textAlign: 'right' }}>{r.st || ' '}</Text>
-                      <Text style={{ width: summaryW, padding: 1, textAlign: 'right' }}>{r.ot || ' '}</Text>
-                      <Text style={{ width: summaryW, padding: 1, textAlign: 'right' }}>{r.dt || ' '}</Text>
-                      <Text style={{ width: summaryW, padding: 1, textAlign: 'right' }}>{r.st + r.ot + r.dt || ' '}</Text>
+                      <Text style={{ width: summaryW, padding: 1, textAlign: 'right', fontFamily: 'Helvetica-Bold' }}>{wkTotals.st || ' '}</Text>
+                      <Text style={{ width: summaryW, padding: 1, textAlign: 'right', fontFamily: 'Helvetica-Bold' }}>{wkTotals.ot || ' '}</Text>
+                      <Text style={{ width: summaryW, padding: 1, textAlign: 'right', fontFamily: 'Helvetica-Bold' }}>{wkTotals.dt || ' '}</Text>
+                      <Text style={{ width: summaryW, padding: 1, textAlign: 'right', fontFamily: 'Helvetica-Bold' }}>{(wkTotals.st + wkTotals.ot + wkTotals.dt) || ' '}</Text>
                     </View>
-                  ))}
-                </View>
-              ))}
+                  </View>
+                );
+              })}
             </View>
           ))}
         </View>
       ))}
 
+      {/* Overhead line — rendered above the Grand Total so the dollars in the
+          "Total Labor $" column visibly sum to the Grand Total. Overhead has
+          no date so its day/tier cells stay blank; only the dollar column
+          carries a value. */}
+      {d.overhead && d.overhead.amount > 0 ? (
+        <View style={{ flexDirection: 'row', borderBottomWidth: 0.25, borderColor: colors.thinLine }}>
+          <Text style={{ width: labelW, padding: 1, paddingLeft: 8, fontStyle: 'italic' }}>{d.overhead.employeeName}</Text>
+          <Text style={{ width: totalW, padding: 1, textAlign: 'right', borderRightWidth: 1, borderColor: colors.line }}>{dollarFor(d.overhead.amount) || ' '}</Text>
+          {Array.from({ length: 21 }).map((_, idx) => empty(`oh-empty-${idx}`))}
+          <Text style={{ width: summaryW, padding: 1 }}> </Text>
+          <Text style={{ width: summaryW, padding: 1 }}> </Text>
+          <Text style={{ width: summaryW, padding: 1 }}> </Text>
+          <Text style={{ width: summaryW, padding: 1 }}> </Text>
+        </View>
+      ) : null}
+
       {/* Grand total */}
       <View style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: colors.line, paddingTop: 2 }}>
         {(() => {
+          // Roll up totals across the full period: right-side tier totals,
+          // dollars, AND per-day (Mon..Sun × ST/OT/DT) sums so the day-of-week
+          // cells in the Grand Total row carry real numbers — same level of
+          // detail the Week total subtotal rows show.
+          const grandByDow = new Map<number, DayBucket>();
           const base = d.dailyGrid.reduce(
-            (a, r) => ({ st: a.st + r.st, ot: a.ot + r.ot, dt: a.dt + r.dt, dollar: a.dollar + r.laborAmount }),
+            (a, r) => {
+              const day = grandByDow.get(r.dow) ?? { st: 0, ot: 0, dt: 0 };
+              day.st += r.st;
+              day.ot += r.ot;
+              day.dt += r.dt;
+              grandByDow.set(r.dow, day);
+              return { st: a.st + r.st, ot: a.ot + r.ot, dt: a.dt + r.dt, dollar: a.dollar + r.laborAmount };
+            },
             { st: 0, ot: 0, dt: 0, dollar: 0 },
           );
           // Overhead has no date so it doesn't appear in any daily row, but its
           // dollars roll into the Grand Total Labor $ so it ties to Page 1.
+          // The overhead row above renders the same amount in the column so
+          // the visible row dollars sum to this Grand Total.
           const t = { ...base, dollar: base.dollar + (d.overhead?.amount ?? 0) };
           return (
             <>
               <Text style={{ width: labelW, padding: 2, fontFamily: 'Helvetica-Bold' }}>Grand Total</Text>
               <Text style={{ width: totalW, padding: 2, textAlign: 'right', fontFamily: 'Helvetica-Bold', borderRightWidth: 1, borderColor: colors.line }}>{dollarFor(t.dollar) || ' '}</Text>
-              {Array.from({ length: 21 }).map((_, i) => <Text key={`g-${i}`} style={{ width: cellW }}> </Text>)}
+              {Array.from({ length: 21 }).map((_, idx) => {
+                const dayIdx = Math.floor(idx / 3);
+                const tierIdx = idx % 3;
+                const day = grandByDow.get(dayIdx);
+                if (!day) return empty(`g-empty-${idx}`);
+                const val = tierIdx === 0 ? day.st : tierIdx === 1 ? day.ot : day.dt;
+                return cell(`g-${idx}`, val);
+              })}
               <Text style={{ width: summaryW, padding: 2, textAlign: 'right', fontFamily: 'Helvetica-Bold' }}>{t.st || ' '}</Text>
               <Text style={{ width: summaryW, padding: 2, textAlign: 'right', fontFamily: 'Helvetica-Bold' }}>{t.ot || ' '}</Text>
               <Text style={{ width: summaryW, padding: 2, textAlign: 'right', fontFamily: 'Helvetica-Bold' }}>{t.dt || ' '}</Text>

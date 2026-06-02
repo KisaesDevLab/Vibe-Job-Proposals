@@ -183,7 +183,10 @@ function LevelForm({ emp, onClose, onSaved }: { emp: Employee; onClose: () => vo
   );
 }
 
+interface CostRateRow { id: string; effectiveFrom: string; effectiveTo: string | null; costSt: string; costOt: string; costDt: string; }
+
 function EmployeeEditForm({ emp, onClose, onSaved }: { emp: Employee; onClose: () => void; onSaved: () => void }) {
+  const qc = useQueryClient();
   const [f, setF] = useState({
     name: emp.name,
     active: emp.active,
@@ -195,8 +198,22 @@ function EmployeeEditForm({ emp, onClose, onSaved }: { emp: Employee; onClose: (
     onSuccess: () => { toast('Employee updated'); onSaved(); },
     onError: (e: any) => toast(e.message, 'err'),
   });
+  const { data: rates } = useQuery({
+    queryKey: ['employee-cost-rates', emp.id],
+    queryFn: () => api.get<CostRateRow[]>(`/employees/${emp.id}/cost-rates`),
+  });
+  const del = useMutation({
+    mutationFn: (rateId: string) => api.del(`/employees/${emp.id}/cost-rates/${rateId}`),
+    onSuccess: () => {
+      toast('Cost rate deleted');
+      qc.invalidateQueries({ queryKey: ['employee-cost-rates', emp.id] });
+      qc.invalidateQueries({ queryKey: ['employees'] });
+    },
+    onError: (e: any) => toast(e.message ?? String(e), 'err'),
+  });
+  const fmtMoney = (s: string) => `$${Number(s ?? 0).toFixed(2)}`;
   return (
-    <Modal open onClose={onClose} title={`Edit Employee — ${emp.name}`}>
+    <Modal open onClose={onClose} title={`Edit Employee — ${emp.name}`} wide>
       <div className="space-y-3">
         <div><label className="label">Name</label><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
         <div>
@@ -210,6 +227,53 @@ function EmployeeEditForm({ emp, onClose, onSaved }: { emp: Employee; onClose: (
           <input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} />
           <span>{f.active ? 'Active' : 'Inactive'} <span className="text-muted">— inactive employees hidden from new time/expense pickers</span></span>
         </label>
+
+        <div>
+          <label className="label">Cost rate history</label>
+          {!rates ? <Skeleton rows={2} /> : rates.length === 0 ? (
+            <p className="text-sm text-muted">No cost rate set yet — use the "New rate" button on the employee row.</p>
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-line">
+              <table className="w-full text-sm">
+                <thead className="bg-paper/60 text-xs">
+                  <tr>
+                    <th className="th">From</th>
+                    <th className="th">To</th>
+                    <th className="th text-right">ST</th>
+                    <th className="th text-right">OT</th>
+                    <th className="th text-right">DT</th>
+                    <th className="th"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rates.map((r) => (
+                    <tr key={r.id}>
+                      <td className="td">{r.effectiveFrom}</td>
+                      <td className="td">{r.effectiveTo ?? <span className="text-finalized">open</span>}</td>
+                      <td className="td text-right">{fmtMoney(r.costSt)}</td>
+                      <td className="td text-right">{fmtMoney(r.costOt)}</td>
+                      <td className="td text-right">{fmtMoney(r.costDt)}</td>
+                      <td className="td text-right">
+                        <button
+                          className="btn-ghost text-red text-xs"
+                          onClick={() => {
+                            if (confirm(`Delete cost rate ${r.effectiveFrom} → ${r.effectiveTo ?? 'open'}?\n\nIf this row covered any time entries, future finalize for those entries will block with "no cost rate" until a replacement is added.`)) {
+                              del.mutate(r.id);
+                            }
+                          }}
+                          disabled={del.isPending}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
         <div className="flex justify-end gap-2 pt-2">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={() => m.mutate()} disabled={!f.name || m.isPending}>Save changes</button>

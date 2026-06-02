@@ -134,12 +134,30 @@ function monthStart(): string {
 
 // Each job's labor + expense totals within a date range, with a one-click path
 // into invoicing (the draft bills all unbilled time/expenses through the to-date).
+// Persist the operator's filter choices across navigation + page reloads so
+// returning to this tab doesn't reset the date range / customer every time.
+const BILLABLE_PREFS_KEY = 'darrow:billable-by-range:prefs';
+type BillablePrefs = { from: string; to: string; customerId: string };
+function loadBillablePrefs(): Partial<BillablePrefs> {
+  try {
+    const raw = localStorage.getItem(BILLABLE_PREFS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+function saveBillablePrefs(p: BillablePrefs) {
+  try { localStorage.setItem(BILLABLE_PREFS_KEY, JSON.stringify(p)); } catch { /* quota / private mode — ignore */ }
+}
+
 function BillableByRange() {
   const nav = useNavigate();
   const qc = useQueryClient();
-  const [from, setFrom] = useState(monthStart());
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
-  const [customerId, setCustomerId] = useState('');
+  const prefs = loadBillablePrefs();
+  const [from, setFrom] = useState(prefs.from ?? monthStart());
+  const [to, setTo] = useState(prefs.to ?? new Date().toISOString().slice(0, 10));
+  const [customerId, setCustomerId] = useState(prefs.customerId ?? '');
+  useEffect(() => { saveBillablePrefs({ from, to, customerId }); }, [from, to, customerId]);
   const { data: customers } = useQuery({ queryKey: ['customers'], queryFn: () => api.get<any[]>('/customers') });
   const { data, isFetching } = useQuery({
     queryKey: ['job-totals', from, to, customerId],

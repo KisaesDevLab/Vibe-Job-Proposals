@@ -192,6 +192,37 @@ employeesRouter.post(
   }),
 );
 
+// List the cost rate history for an employee. Used by the edit modal's
+// history table.
+employeesRouter.get(
+  '/:id/cost-rates',
+  ah(async (req, res) => {
+    const rows = await db
+      .select()
+      .from(employeeCostRates)
+      .where(eq(employeeCostRates.employeeId, req.params.id))
+      .orderBy(desc(employeeCostRates.effectiveFrom));
+    res.json(ok(rows));
+  }),
+);
+
+// Delete a cost rate row. Future finalize against time entries in the deleted
+// window will surface a clear "no_cost_rate" blocker — no historical snapshot
+// is mutated (those are frozen by finalize).
+employeesRouter.delete(
+  '/:id/cost-rates/:rateId',
+  ah(async (req: AuthedRequest, res) => {
+    const [row] = await db
+      .select()
+      .from(employeeCostRates)
+      .where(and(eq(employeeCostRates.id, req.params.rateId), eq(employeeCostRates.employeeId, req.params.id)));
+    if (!row) throw new HttpError(404, 'not_found', 'Cost rate row not found');
+    await db.delete(employeeCostRates).where(eq(employeeCostRates.id, row.id));
+    await writeAudit({ userId: req.user?.id, entityType: 'employee', entityId: req.params.id, action: 'update', summary: `Deleted cost rate ${row.effectiveFrom} → ${row.effectiveTo ?? 'open'}` });
+    res.json(ok({ deleted: true }));
+  }),
+);
+
 employeesRouter.post(
   '/:id/cost-rates',
   ah(async (req: AuthedRequest, res) => {
@@ -199,16 +230,47 @@ employeesRouter.post(
     const empId = req.params.id;
     try {
       const result = await db.transaction(async (tx) => {
-        // close prior open rate
-        await tx
-          .update(employeeCostRates)
-          .set({ effectiveTo: body.effective_from })
+        // Three cases for the incoming effective_from = X:
+        //  (a) No open row yet               → just INSERT as the new open row.
+        //  (b) Open row's start <= X         → forward case: close the open
+        //      row at X and INSERT a new open row from X. (Existing behavior.)
+        //  (c) Open row's start >  X         → backdate before the open row:
+        //      INSERT a closed window ending at openRow.effective_from and
+        //      leave the open row untouched. The legacy code blindly UPDATEd
+        //      the open row's effective_to = X, producing an invalid range
+        //      (from > to) and an opaque "Internal error".
+        const openRows = await tx
+          .select()
+          .from(employeeCostRates)
           .where(and(eq(employeeCostRates.employeeId, empId), isNull(employeeCostRates.effectiveTo)));
+        const open = openRows[0];
+
+        if (open && open.effectiveFrom <= body.effective_from) {
+          await tx
+            .update(employeeCostRates)
+            .set({ effectiveTo: body.effective_from })
+            .where(eq(employeeCostRates.id, open.id));
+          const [row] = await tx
+            .insert(employeeCostRates)
+            .values({
+              employeeId: empId,
+              effectiveFrom: body.effective_from,
+              costSt: String(body.cost_st),
+              costOt: String(body.cost_ot),
+              costDt: String(body.cost_dt),
+            })
+            .returning();
+          return row;
+        }
+
+        // (a) or (c)
         const [row] = await tx
           .insert(employeeCostRates)
           .values({
             employeeId: empId,
             effectiveFrom: body.effective_from,
+            // Backdate case caps at the open row's start; pure-empty case stays open.
+            effectiveTo: open ? open.effectiveFrom : null,
             costSt: String(body.cost_st),
             costOt: String(body.cost_ot),
             costDt: String(body.cost_dt),

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, Download, FileText, Ban, RefreshCw, Mail, Package, Trash2 } from 'lucide-react';
@@ -80,8 +80,28 @@ export function InvoiceDetailPage({ id }: { id: string }) {
           )}
           {!isDraft && inv.status !== 'void' && (
             <>
-              <a className="btn-ghost" href={`/api/invoices/${id}/docx`}><FileText size={15} /> DOCX</a>
-              <a className="btn-ghost" href={`/api/invoices/${id}/pdf`}><Download size={15} /> PDF</a>
+              <a
+                className={`btn-ghost ${inv.docx_status !== 'ready' ? 'pointer-events-none opacity-50' : ''}`}
+                href={`/api/invoices/${id}/docx`}
+                title={
+                  inv.docx_status === 'ready' ? 'Download DOCX'
+                  : inv.docx_status === 'failed' ? `DOCX failed — click Regenerate to retry${inv.generation_error ? `: ${inv.generation_error}` : ''}`
+                  : `DOCX ${inv.docx_status ?? 'pending'}…`
+                }
+              >
+                <FileText size={15} /> DOCX{inv.docx_status === 'failed' ? ' (failed)' : inv.docx_status !== 'ready' ? ` (${inv.docx_status ?? 'pending'}…)` : ''}
+              </a>
+              <a
+                className={`btn-ghost ${inv.pdf_status !== 'ready' ? 'pointer-events-none opacity-50' : ''}`}
+                href={`/api/invoices/${id}/pdf`}
+                title={
+                  inv.pdf_status === 'ready' ? 'Download PDF'
+                  : inv.pdf_status === 'failed' ? 'PDF failed — LibreOffice may not be installed. Use Package PDF instead, or install LibreOffice and click Regenerate.'
+                  : `PDF ${inv.pdf_status ?? 'pending'}…`
+                }
+              >
+                <Download size={15} /> PDF{inv.pdf_status === 'failed' ? ' (failed)' : inv.pdf_status !== 'ready' ? ` (${inv.pdf_status ?? 'pending'}…)` : ''}
+              </a>
               <a
                 className={`btn-primary ${inv.package_status !== 'ready' ? 'pointer-events-none opacity-50' : ''}`}
                 href={`/api/invoices/${id}/package`}
@@ -193,15 +213,57 @@ function DraftView({ data }: { id: string; data: any }) {
 }
 
 function SnapshotView({ inv, lines }: { inv: any; lines: any[] }) {
+  // Collapse the snapshot's per-(time_entry, tier) labor rows into one row per
+  // (employee, tier, rate). The DB stores one row per time entry × non-zero
+  // tier so a finalize view for a 5-day-week, 8-employee crew would show 40+
+  // labor rows; the operator wants to see "8 employees × 3 tiers = 24 rows"
+  // at most. Subtotals, overhead, expenses, markups, and grand_total pass
+  // through unchanged so the totals math is unaffected.
+  const renderLines = useMemo(() => {
+    const out: any[] = [];
+    const groups = new Map<string, any>();
+    const flush = () => {
+      // Stable ordering when emitting: employee asc, tier ST → OT → DT.
+      const tierOrder = (t: string | null) => t === 'st' ? 0 : t === 'ot' ? 1 : t === 'dt' ? 2 : 9;
+      const rows = [...groups.values()].sort((a, b) => {
+        const an = a.employeeName ?? a.description ?? '';
+        const bn = b.employeeName ?? b.description ?? '';
+        return an.localeCompare(bn) || tierOrder(a.tier) - tierOrder(b.tier);
+      });
+      for (const r of rows) out.push(r);
+      groups.clear();
+    };
+    for (const l of lines) {
+      if (l.lineType === 'labor') {
+        // Key on rate too: a mid-invoice promotion legitimately splits a single
+        // (employee, tier) into separate priced groups so rate × hours = amount.
+        const key = `${l.employeeId ?? ''}|${l.tier ?? ''}|${l.unitRate ?? ''}`;
+        const ex = groups.get(key);
+        if (ex) {
+          ex.quantity = Number(ex.quantity) + Number(l.quantity);
+          ex.amount = Number(ex.amount) + Number(l.amount);
+        } else {
+          // Drop the original `id` so React keys stay unique across groups.
+          groups.set(key, { ...l, id: `agg-${key}`, quantity: Number(l.quantity), amount: Number(l.amount), _aggregated: true });
+        }
+      } else {
+        flush();
+        out.push(l);
+      }
+    }
+    flush();
+    return out;
+  }, [lines]);
+
   return (
     <div className="grid grid-cols-3 gap-6">
       <div className="col-span-2 card overflow-hidden">
         <table className="w-full text-sm">
           <tbody>
-            {lines.map((l) => (
+            {renderLines.map((l) => (
               <tr key={l.id} className={l.lineType.includes('subtotal') || l.lineType === 'grand_total' ? 'font-semibold' : ''}>
                 <td className="td">{l.description}</td>
-                <td className="td">{l.quantity ? `${l.quantity} @ ${formatMoney(l.unitRate)}` : ''}</td>
+                <td className="td">{l.quantity ? `${Number(l.quantity).toFixed(2)} hrs @ ${formatMoney(l.unitRate)}` : ''}</td>
                 <td className="td text-right">{formatMoney(l.amount)}</td>
               </tr>
             ))}

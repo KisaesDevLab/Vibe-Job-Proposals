@@ -72,9 +72,9 @@ function RateSheet() {
                         <tr key={r.employee_id} className={r.missing ? 'text-red' : ''}>
                           <td className="td font-medium">{r.employee}</td>
                           <td className="td">{r.level}</td>
-                          <td className="td text-right">{r.missing ? '—' : `$${r.rate_1x}`}</td>
-                          <td className="td text-right">{r.missing ? '—' : `$${r.rate_15x}`}</td>
-                          <td className="td text-right">{r.missing ? '—' : `$${r.rate_2x}`}</td>
+                          <td className="td text-right">{r.missing ? '—' : formatMoney(r.rate_1x)}</td>
+                          <td className="td text-right">{r.missing ? '—' : formatMoney(r.rate_15x)}</td>
+                          <td className="td text-right">{r.missing ? '—' : formatMoney(r.rate_2x)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -119,7 +119,15 @@ function PerJobReports() {
         <div className="card overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr>{Object.keys(data[0]).map((k) => <th key={k} className="th">{k}</th>)}</tr></thead>
-            <tbody>{data.map((row, i) => <tr key={i}>{Object.values(row).map((v: any, j) => <td key={j} className="td">{String(v ?? '')}</td>)}</tr>)}</tbody>
+            <tbody>
+              {data.map((row, i) => (
+                <tr key={i}>
+                  {Object.entries(row).map(([k, v], j) => (
+                    <td key={j} className={`td ${isNumericCol(k) ? 'text-right' : ''}`}>{formatCell(k, v)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       )}
@@ -314,4 +322,36 @@ function JobProfitReport() {
       )}
     </div>
   );
+}
+
+// Per-job-reports table formatter — JSON rows come back with raw numeric
+// strings (numeric(10,2) → "1234.56"). The table previously rendered them
+// verbatim; we want commas on every numeric column and a "$" on dollar
+// columns. Anything whose key looks like a dollar field gets formatMoney;
+// other numerics still get thousands separators.
+const NUM_FMT = new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const MONEY_KEYS = /(^|_)(amount|total|cost|rate|markup|profit|labor|expense|billed|grand)(_|$)/i;
+function isNumericVal(v: unknown): boolean {
+  if (v == null || v === '') return false;
+  if (typeof v === 'number') return isFinite(v);
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return false;
+    return /^-?\d+(\.\d+)?$/.test(s);
+  }
+  return false;
+}
+function isNumericCol(key: string): boolean {
+  return /(^|_)(amount|total|cost|rate|markup|profit|labor|expense|billed|grand|hours|qty|count|st|ot|dt)(_|$)/i.test(key);
+}
+function isMoneyCol(key: string): boolean {
+  return MONEY_KEYS.test(key);
+}
+function formatCell(key: string, v: unknown): string {
+  if (v == null || v === '') return '';
+  if (isNumericVal(v)) {
+    const n = typeof v === 'number' ? v : parseFloat(String(v));
+    return isMoneyCol(key) ? formatMoney(n) : NUM_FMT.format(n);
+  }
+  return String(v);
 }

@@ -101,7 +101,10 @@ export async function buildPackageData(invoiceId: string): Promise<PackageData> 
     JOIN time_entries te ON te.id = li.time_entry_id
     JOIN employees e ON e.id = te.employee_id
     WHERE li.invoice_id = ${invoiceId} AND li.line_type = 'labor' AND li.time_entry_id IS NOT NULL
-    ORDER BY te.work_date, e.name`;
+    ORDER BY work_date, employee_name`;
+  // Note: ORDER BY must reference SELECT-list expressions when DISTINCT is
+  // in use. te.work_date (date) isn't in the SELECT list — only the aliased
+  // te.work_date::text AS work_date is — so order by the alias instead.
   const teRows = snapshotTe.length > 0 ? snapshotTe : await sql<any[]>`
     SELECT te.id, te.work_date::text AS work_date, te.employee_id, e.name AS employee_name,
            te.st_hours, te.ot_hours, te.dt_hours
