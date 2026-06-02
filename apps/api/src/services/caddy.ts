@@ -16,7 +16,6 @@
 
 import { mkdirSync, writeFileSync, renameSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -70,7 +69,10 @@ ${p.fqdn} {
 export function writeCaddyfile(p: CaddyfileParams): string {
   mkdirSync(CADDY_DIR, { recursive: true, mode: 0o700 });
   const body = render(p);
-  const tmp = join(tmpdir(), `Caddyfile.${randomBytes(6).toString('hex')}`);
+  // Temp file lives in CADDY_DIR (not os.tmpdir) — /tmp and /storage are
+  // separate filesystems inside the container, so a cross-fs rename trips
+  // EXDEV. Same dir keeps the rename atomic.
+  const tmp = join(CADDY_DIR, `.Caddyfile.${randomBytes(6).toString('hex')}`);
   writeFileSync(tmp, body, { mode: 0o600 });
   renameSync(tmp, CADDYFILE);
   return CADDYFILE;

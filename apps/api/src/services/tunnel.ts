@@ -12,7 +12,6 @@
 
 import { mkdirSync, writeFileSync, renameSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import Docker from 'dockerode';
 import { sql } from '@darrow/db';
@@ -70,10 +69,13 @@ function fqdnOf(row: { tunnel_subdomain: string | null; cf_zone_name: string | n
   return `${row.tunnel_subdomain}.${row.cf_zone_name}`;
 }
 
-/** Atomic-write the 0600 env_file consumed by the cloudflared container. */
+/** Atomic-write the 0600 env_file consumed by the cloudflared container.
+ *  The temp file lives in CF_DIR (not the OS tmpdir) because /tmp is on a
+ *  different filesystem inside the container than /storage — rename across
+ *  filesystems fails with EXDEV. Same dir = same filesystem = atomic rename. */
 function writeConnectorEnv(connectorToken: string): void {
   mkdirSync(CF_DIR, { recursive: true, mode: 0o700 });
-  const tmp = join(tmpdir(), `tunnel.env.${randomBytes(6).toString('hex')}`);
+  const tmp = join(CF_DIR, `.tunnel.env.${randomBytes(6).toString('hex')}`);
   writeFileSync(tmp, `TUNNEL_TOKEN=${connectorToken}\n`, { mode: 0o600 });
   renameSync(tmp, CF_ENV);
 }
