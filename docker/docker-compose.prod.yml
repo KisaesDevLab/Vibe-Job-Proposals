@@ -36,12 +36,19 @@ services:
       CADDY_API_PORT: '3000'
       CADDY_WEB_HOST: app
       CADDY_WEB_PORT: '3000'
-      CLOUDFLARED_CONTAINER: cloudflared
+      CLOUDFLARED_CONTAINER: darrow-cloudflared-1
     ports: ['3000:3000']
+    # The container runs as a non-root user (uid 10001). The Docker socket is
+    # owned by the host's docker group (gid varies — typically 999, 998, or
+    # whatever Docker's package picked). The install script writes DOCKER_GID
+    # into the .env so compose can add the container user to that gid here.
+    # Fallback 999 covers stock Docker Desktop / get-docker.com installs.
+    group_add: ['${DOCKER_GID:-999}']
     volumes:
       - storage:/storage
-      # Read-only docker socket so the api can restart cloudflared after
-      # provisioning. Required for the Settings → Remote access workflow.
+      # Docker socket so the api can manage the cloudflared container during
+      # Settings → Remote access provisioning. Read-write is required:
+      # creating/removing containers needs POST permission on the socket.
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

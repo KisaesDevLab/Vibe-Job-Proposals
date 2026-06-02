@@ -92,6 +92,10 @@ else
   b64()   { openssl rand -base64 18 | tr -d '=+/' ; }
   # Pick the first non-loopback IPv4 the box has; fallback to localhost.
   IP=$(hostname -I 2>/dev/null | awk '{print $1}'); IP=${IP:-localhost}
+  # Detect the docker group GID so the api container's non-root user can
+  # access /var/run/docker.sock (needed by the Settings → Remote access
+  # tunnel workflow). Falls back to 999 — the stock get-docker.com GID.
+  DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 999)
   cat > .env <<EOF
 SESSION_SECRET=$(hex32)
 SMTP_ENC_KEY=$(hex32)
@@ -99,6 +103,7 @@ TUNNEL_ENC_KEY=$(hex32)
 PUBLIC_UPLOAD_TOKEN=$(b64)
 POSTGRES_PASSWORD=$(openssl rand -hex 16)
 APP_BASE_URL=http://${IP}:3000
+DOCKER_GID=${DOCKER_GID}
 EOF
   chmod 600 .env
   chown "$SERVICE_USER":"$SERVICE_USER" .env
