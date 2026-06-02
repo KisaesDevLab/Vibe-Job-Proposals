@@ -81,30 +81,19 @@ services:
       timeout: 3s
       retries: 5
 
+  # cloudflared is fully managed by the api via dockerode (it stops + recreates
+  # the container with TUNNEL_TOKEN injected as an env var when you provision
+  # from Settings → Remote access). The compose definition is kept only so
+  # `docker compose --profile tunnel down` cleans up after disable. The
+  # container never auto-starts here — the image is scratch (no /bin/sh) and
+  # the api owns its lifecycle.
   cloudflared:
     profiles: ['tunnel']
     image: cloudflare/cloudflared:latest
-    # No restart on boot — the api starts/restarts this container via the
-    # Docker socket after writing /storage/cloudflared/tunnel.env. Reading
-    # the token from the shared volume at entrypoint time avoids any
-    # host-path bind mount and works on every deploy target.
     restart: 'no'
-    depends_on:
-      caddy: { condition: service_started }
-    volumes:
-      - storage:/storage:ro
-    entrypoint: ['/bin/sh', '-c']
-    command:
-      - |
-        set -e
-        F=/storage/cloudflared/tunnel.env
-        if [ ! -s "$$F" ]; then
-          echo "[cloudflared] $$F not found or empty — provision the tunnel from Settings → Remote access" >&2
-          exit 1
-        fi
-        . "$$F"
-        [ -n "$$TUNNEL_TOKEN" ] || { echo "[cloudflared] TUNNEL_TOKEN unset" >&2; exit 1; }
-        exec cloudflared tunnel --no-autoupdate run --token "$$TUNNEL_TOKEN"
+    command: ['tunnel', '--no-autoupdate', 'run']
+    environment:
+      TUNNEL_TOKEN: '${TUNNEL_TOKEN:-}'
 
   postgres:
     image: postgres:16-alpine

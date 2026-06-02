@@ -10,9 +10,6 @@
 // env_file at $STORAGE_ROOT/cloudflared/tunnel.env that the cloudflared
 // docker service reads.
 
-import { mkdirSync, writeFileSync, renameSync, existsSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
 import Docker from 'dockerode';
 import { sql } from '@darrow/db';
 import { config } from '../config.js';
@@ -30,9 +27,7 @@ import {
 } from './cloudflare.js';
 import { writeCaddyfile, removeCaddyfile, reloadCaddy } from './caddy.js';
 
-const CF_DIR = join(config.STORAGE_ROOT, 'cloudflared');
-const CF_ENV = join(CF_DIR, 'tunnel.env');
-const CLOUDFLARED_CONTAINER = process.env.CLOUDFLARED_CONTAINER ?? 'cloudflared';
+const CLOUDFLARED_CONTAINER = process.env.CLOUDFLARED_CONTAINER ?? 'darrow-cloudflared-1';
 
 interface TunnelSettingsRow {
   tunnel_enabled: boolean;
@@ -69,43 +64,74 @@ function fqdnOf(row: { tunnel_subdomain: string | null; cf_zone_name: string | n
   return `${row.tunnel_subdomain}.${row.cf_zone_name}`;
 }
 
-/** Atomic-write the 0600 env_file consumed by the cloudflared container.
- *  The temp file lives in CF_DIR (not the OS tmpdir) because /tmp is on a
- *  different filesystem inside the container than /storage — rename across
- *  filesystems fails with EXDEV. Same dir = same filesystem = atomic rename. */
-function writeConnectorEnv(connectorToken: string): void {
-  mkdirSync(CF_DIR, { recursive: true, mode: 0o700 });
-  const tmp = join(CF_DIR, `.tunnel.env.${randomBytes(6).toString('hex')}`);
-  writeFileSync(tmp, `TUNNEL_TOKEN=${connectorToken}\n`, { mode: 0o600 });
-  renameSync(tmp, CF_ENV);
+/** Detect the Docker network the api container is on so the cloudflared
+ *  sidecar can resolve service names like `caddy`. Falls back to
+ *  `<compose-project>_default` (typical) and finally to `darrow_default`. */
+async function detectNetworkName(docker: Docker): Promise<string> {
+  const containerId = process.env.HOSTNAME;
+  if (containerId) {
+    try {
+      const self = docker.getContainer(containerId);
+      const info = await self.inspect();
+      const nets = Object.keys(info.NetworkSettings?.Networks ?? {});
+      if (nets.length > 0) return nets[0];
+    } catch { /* fall through to default */ }
+  }
+  return 'darrow_default';
 }
 
-function removeConnectorEnv(): void {
-  if (existsSync(CF_ENV)) unlinkSync(CF_ENV);
-}
+/** Full lifecycle for the cloudflared container: stop + remove any existing
+ *  copy, then create + start a fresh one with TUNNEL_TOKEN injected directly
+ *  as an env var. We avoid the previous shell-wrapped env_file approach
+ *  because cloudflare/cloudflared:latest is scratch-based — no /bin/sh — so
+ *  the wrapper crashed with "exec /bin/sh: no such file or directory". This
+ *  bypasses compose's profile gate entirely; the operator never needs to run
+ *  `docker compose --profile tunnel up` for cloudflared. */
+async function ensureCloudflaredRunning(connectorToken: string): Promise<void> {
+  let docker: Docker;
+  try { docker = new Docker(); } catch (err) {
+    logger.warn('docker socket unavailable; cloudflared not started automatically', { err: String(err) });
+    return;
+  }
+  const network = await detectNetworkName(docker);
 
-/** Restart the cloudflared docker service so it picks up the new TUNNEL_TOKEN
- *  from the env_file. Best-effort: in dev where Docker isn't available, log
- *  and continue. */
-async function restartCloudflared(): Promise<void> {
+  // Drop any existing container (compose-created or previous dockerode run)
   try {
-    const docker = new Docker();
-    const container = docker.getContainer(CLOUDFLARED_CONTAINER);
-    await container.restart({ t: 5 }).catch(async (err: any) => {
-      // If the container doesn't exist (fresh deploy w/o cloudflared running),
-      // attempt to start it via the compose-managed labels — best-effort.
-      logger.warn('cloudflared restart failed; attempting start', { err: String(err) });
-      await container.start().catch((e: any) => {
-        throw new Error(`Could not start cloudflared container "${CLOUDFLARED_CONTAINER}": ${e.message}`);
+    const existing = docker.getContainer(CLOUDFLARED_CONTAINER);
+    await existing.stop({ t: 5 }).catch(() => {});
+    await existing.remove({ force: true }).catch(() => {});
+  } catch { /* didn't exist */ }
+
+  // Pull image (no-op if cached). Best-effort — start anyway if pull fails
+  // since the image may already be present from a prior compose-up.
+  try {
+    await new Promise<void>((resolve, reject) => {
+      docker.pull('cloudflare/cloudflared:latest', (err: any, stream: NodeJS.ReadableStream | null) => {
+        if (err) return reject(err);
+        if (!stream) return resolve();
+        docker.modem.followProgress(stream, (e: any) => e ? reject(e) : resolve());
       });
     });
-    logger.info('cloudflared restarted', { container: CLOUDFLARED_CONTAINER });
   } catch (err) {
-    // Docker socket not mounted (e.g., local dev without docker). Log and
-    // continue — the provision flow has already persisted everything, so the
-    // operator can restart the container manually.
-    logger.warn('docker socket unavailable; cloudflared not restarted automatically', { err: String(err) });
+    logger.warn('cloudflared image pull failed; using cached if any', { err: String(err) });
   }
+
+  const created = await docker.createContainer({
+    name: CLOUDFLARED_CONTAINER,
+    Image: 'cloudflare/cloudflared:latest',
+    Cmd: ['tunnel', '--no-autoupdate', 'run'],
+    Env: [`TUNNEL_TOKEN=${connectorToken}`],
+    HostConfig: {
+      NetworkMode: network,
+      RestartPolicy: { Name: 'unless-stopped' },
+    },
+    Labels: {
+      'com.docker.compose.project': 'darrow',
+      'com.docker.compose.service': 'cloudflared',
+    },
+  });
+  await created.start();
+  logger.info('cloudflared started', { container: CLOUDFLARED_CONTAINER, network });
 }
 
 async function stopCloudflared(): Promise<void> {
@@ -113,6 +139,7 @@ async function stopCloudflared(): Promise<void> {
     const docker = new Docker();
     const container = docker.getContainer(CLOUDFLARED_CONTAINER);
     await container.stop({ t: 5 }).catch(() => {});
+    await container.remove({ force: true }).catch(() => {});
   } catch (err) {
     logger.warn('docker socket unavailable; cloudflared not stopped automatically', { err: String(err) });
   }
@@ -162,7 +189,6 @@ export async function provisionTunnel(input: ProvisionInput): Promise<ProvisionR
     tunnel_last_provisioned_at = now()
     WHERE id = 1`;
 
-  writeConnectorEnv(connectorToken);
   writeCaddyfile({
     fqdn,
     apiHost: process.env.CADDY_API_HOST ?? 'api',
@@ -171,12 +197,12 @@ export async function provisionTunnel(input: ProvisionInput): Promise<ProvisionR
     webPort: Number(process.env.CADDY_WEB_PORT ?? 80),
   });
 
-  // Reload Caddy first (idempotent), then bounce cloudflared so it picks up
-  // the new connector token.
+  // Reload Caddy first (idempotent), then (re-)create cloudflared with the
+  // new connector token injected as an env var.
   await reloadCaddy().catch((err) => {
     logger.warn('caddy reload failed at provision; will retry at next save', { err: String(err) });
   });
-  await restartCloudflared();
+  await ensureCloudflaredRunning(connectorToken);
 
   await sql`UPDATE settings SET tunnel_status = 'connected' WHERE id = 1`;
   return { fqdn, tunnel_id: tunnel.id, status: 'connected' };
@@ -196,7 +222,6 @@ export async function disableTunnel(): Promise<void> {
       logger.warn('tunnel delete failed (continuing — connections may still be open)', { err: String(err) });
     });
   }
-  removeConnectorEnv();
   removeCaddyfile();
   await sql`UPDATE settings SET
     tunnel_enabled = false,
