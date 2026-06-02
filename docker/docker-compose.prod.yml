@@ -11,7 +11,7 @@
 #      → Caddy:443 (self-signed; trusted via noTLSVerify) → app:3000.
 services:
   app:
-    image: ghcr.io/kisaesdevlab/darrow-time-invoicing:latest
+    image: ghcr.io/kisaesdevlab/vibe-job-proposals:latest
     build:
       context: ..
       dockerfile: docker/Dockerfile
