@@ -1,7 +1,7 @@
 # Multi-stage build: deps -> build -> runtime.
 
 # ---- deps ----
-FROM node:20-bookworm-slim AS deps
+FROM node:24-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY packages/shared/package.json packages/shared/
@@ -12,14 +12,14 @@ COPY apps/web/package.json apps/web/
 RUN npm install --no-audit --no-fund
 
 # ---- build ----
-FROM node:20-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
 # ---- runtime ----
-FROM node:20-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 

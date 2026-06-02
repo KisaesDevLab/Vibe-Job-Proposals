@@ -63,15 +63,15 @@ $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
   Fail @"
 Node.js is not installed.
-Download and install the LTS version (20.x or newer):
+Download and install the LTS version (24.x or newer):
   https://nodejs.org/
 Then re-run install.bat.
 "@
 }
 $nodeVer = (node -v) -replace 'v',''
 $major = [int]($nodeVer.Split('.')[0])
-if ($major -lt 20) {
-  Fail "Node.js $nodeVer is too old. Install Node 20 LTS or newer from https://nodejs.org/"
+if ($major -lt 24) {
+  Fail "Node.js $nodeVer is too old. Install Node 24 LTS or newer from https://nodejs.org/"
 }
 Ok "Node.js v$nodeVer"
 
