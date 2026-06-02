@@ -30,20 +30,40 @@ import { reportsRouter } from './routes/reports.js';
 export function createApp(): express.Express {
   const app = express();
   app.set('trust proxy', 1);
+  // FORCE_HTTPS=1 turns on HSTS + upgrade-insecure-requests for installs
+  // sitting behind a TLS-terminating proxy (Caddy + Cloudflare Tunnel).
+  // Default OFF so a LAN-only http://server:3000 install doesn't have its
+  // browser auto-upgrade asset requests to https and end up with SSL errors
+  // + a blank page.
+  const forceHttps = process.env.FORCE_HTTPS === '1' || process.env.FORCE_HTTPS === 'true';
   app.use(
     helmet({
       contentSecurityPolicy: isProd
         ? {
+            // Helmet's default CSP includes `upgrade-insecure-requests`,
+            // which makes every asset request go https — fatal for a
+            // plain-http LAN install. Use `useDefaults: false` and spell
+            // out the directives we want.
+            useDefaults: false,
             directives: {
               defaultSrc: ["'self'"],
               imgSrc: ["'self'", 'data:'],
               styleSrc: ["'self'", "'unsafe-inline'"],
+              scriptSrc: ["'self'"],
+              fontSrc: ["'self'", 'data:'],
+              connectSrc: ["'self'"],
               objectSrc: ["'none'"],
               frameAncestors: ["'none'"],
               baseUri: ["'self'"],
+              formAction: ["'self'"],
+              ...(forceHttps ? { upgradeInsecureRequests: [] } : {}),
             },
           }
         : false,
+      // HSTS only when explicitly running behind HTTPS. Sending HSTS over
+      // http: locks the browser into "https-only" for this host for a year
+      // — disastrous if the operator just wants LAN access.
+      strictTransportSecurity: forceHttps ? undefined : false,
     }),
   );
   app.use(express.json({ limit: '1mb' }));
