@@ -27,16 +27,21 @@ renders identically forever, even if rate schedules change later.
 | `{invoice.date}` | Finalized date, MM/DD/YYYY |
 | `{invoice.through_date}` | MM/DD/YYYY |
 | `{invoice.notes}` | Invoice notes |
-| `{totals.labor}` | Pre-formatted `$1,234.56` |
-| `{totals.materials}` | … |
-| `{totals.equipment_rent}` | … |
-| `{totals.truck_rental}` | … |
-| `{totals.per_diem}` | … |
-| `{totals.travel}` | … |
-| `{totals.freight}` | … |
-| `{totals.stock_material}` | … |
-| `{totals.markup}` | Total expense markup |
+| `{totals.labor}` | Pre-formatted `$1,234.56`. Includes the overhead line. |
+| `{totals.materials}` | Materials raw cost **+** its markup |
+| `{totals.equipment_rent}` | Equipment rent + its markup |
+| `{totals.truck_rental}` | Truck rental + its markup |
+| `{totals.per_diem}` | Per diem + its markup |
+| `{totals.travel}` | Travel + its markup |
+| `{totals.freight}` | Freight + its markup |
+| `{totals.stock_material}` | Stock material + its markup |
+| `{totals.markup}` | Total markup across all categories (kept for templates that show a separate markup line) |
 | `{totals.grand_total}` | Grand total |
+
+Each category total is the customer-facing all-in amount — raw expense
+amount plus that category's markup. `{totals.markup}` still exposes the
+total markup separately if your template lists it on its own line; don't
+double-count it.
 
 ## Loops
 

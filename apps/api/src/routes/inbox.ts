@@ -13,6 +13,7 @@ import { writeAudit } from '../audit.js';
 import { enqueueInboxToPdf } from '../queue.js';
 import { ingestInboxFile } from '../services/inbox-ingest.js';
 import { config } from '../config.js';
+import { sql as rawsql } from '@darrow/db';
 
 export const inboxRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -24,7 +25,19 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 inboxRouter.get('/public-link', ah(async (_req, res) => {
   const token = config.PUBLIC_UPLOAD_TOKEN;
   if (!token) return res.json(ok({ enabled: false, url: null }));
-  const base = (config.APP_BASE_URL ?? '').replace(/\/+$/, '');
+  // Prefer the Cloudflare Tunnel FQDN when one's been provisioned and is
+  // active — that's the URL employees can actually reach from outside the
+  // LAN. Fall back to APP_BASE_URL (typically http://<host>:3000) when no
+  // tunnel is up.
+  let base = (config.APP_BASE_URL ?? '').replace(/\/+$/, '');
+  try {
+    const [row] = await rawsql<{ enabled: boolean; subdomain: string | null; zone_name: string | null }[]>`
+      SELECT tunnel_enabled AS enabled, tunnel_subdomain AS subdomain, cf_zone_name AS zone_name
+      FROM settings WHERE id = 1`;
+    if (row?.enabled && row.subdomain && row.zone_name) {
+      base = `https://${row.subdomain}.${row.zone_name}`;
+    }
+  } catch { /* tunnel columns missing on very old installs — fall through */ }
   const url = `${base}/upload?k=${encodeURIComponent(token)}`;
   res.json(ok({ enabled: true, url }));
 }));

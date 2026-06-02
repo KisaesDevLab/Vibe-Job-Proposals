@@ -69,15 +69,29 @@ export async function buildInvoiceData(invoiceId: string): Promise<Record<string
 
   const addr = (parts: (string | null)[]) => parts.filter((p) => p && p.trim()).join('\n');
 
+  // Per-category markup, summed from the snapshot's expense_markup line items.
+  // The placeholders below fold each category's markup INTO that category's
+  // total so the docx renders the customer-facing all-in number (e.g.
+  // "Materials: $1,150" instead of "$1,000 raw + $150 markup elsewhere").
+  // total_markup remains exposed for templates that want the bottom-line
+  // markup row separately.
+  const markupByCat = new Map<string, number>();
+  for (const l of lines) {
+    if (l.line_type !== 'expense_markup') continue;
+    const k = String(l.category);
+    markupByCat.set(k, (markupByCat.get(k) ?? 0) + Number(l.amount ?? 0));
+  }
+  const add = (raw: unknown, cat: string) => Number(raw ?? 0) + (markupByCat.get(cat) ?? 0);
   const totalsRaw = {
     labor: inv.total_labor,
-    materials: inv.total_materials,
-    equipment_rent: inv.total_equipment_rent,
-    truck_rental: inv.total_truck_rental,
-    per_diem: inv.total_per_diem,
-    travel: inv.total_travel,
-    freight: inv.total_freight,
-    stock_material: inv.total_stock_material,
+    // Category totals = raw expense amount + that category's markup.
+    materials: add(inv.total_materials, 'materials'),
+    equipment_rent: add(inv.total_equipment_rent, 'equipment_rent'),
+    truck_rental: add(inv.total_truck_rental, 'truck_rental'),
+    per_diem: add(inv.total_per_diem, 'per_diem'),
+    travel: add(inv.total_travel, 'travel'),
+    freight: add(inv.total_freight, 'freight'),
+    stock_material: add(inv.total_stock_material, 'stock_material'),
     markup: inv.total_markup,
     grand_total: inv.grand_total,
   };
