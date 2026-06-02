@@ -54,7 +54,10 @@ export function createApp(): express.Express {
               fontSrc: ["'self'", 'data:'],
               connectSrc: ["'self'"],
               objectSrc: ["'none'"],
-              frameAncestors: ["'none'"],
+              // 'self' (not 'none') so the Inbox preview iframe — which loads
+              // /api/inbox/:id/download on the same origin — can render.
+              // External sites still can't embed us.
+              frameAncestors: ["'self'"],
               baseUri: ["'self'"],
               formAction: ["'self'"],
               ...(forceHttps ? { upgradeInsecureRequests: [] } : {}),
