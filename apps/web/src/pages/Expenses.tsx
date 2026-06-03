@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Paperclip, Download, Inbox as InboxIcon, Trash2, Upload } from 'lucide-react';
+import { Plus, Paperclip, Download, Inbox as InboxIcon, Trash2, Upload, Eye, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatMoney, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS, type ExpenseCategory } from '@darrow/shared';
 import { PageHeader } from '@/components/Layout';
@@ -157,6 +157,7 @@ function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onCl
   const { data } = useQuery({ queryKey: ['expense', expense.id], queryFn: () => api.get<any>(`/expenses/${expense.id}`), refetchInterval: (q) => (q.state.data?.attachments?.some((a: any) => a.status === 'pending') ? 2000 : false) });
   const { data: jobs } = useQuery({ queryKey: ['jobs-active'], queryFn: () => api.get<{ jobs: any[] }>('/jobs?active=true&pageSize=300') });
   const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState<{ id: string; name: string } | null>(null);
   const [f, setF] = useState<{ work_date: string; job_id: string; vendor: string; amount: string; category: string; reference: string; description: string } | null>(null);
   // Initialize the editable form once the detail loads (or after a save refetch
   // overwrites the row with server-canonical values).
@@ -208,6 +209,25 @@ function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onCl
     try { await api.upload(`/expenses/${expense.id}/attachments`, file); toast('Uploaded'); qc.invalidateQueries({ queryKey: ['expense', expense.id] }); onChanged(); }
     catch (e: any) { toast(e.message, 'err'); }
     finally { setUploading(false); }
+  }
+
+  async function deleteAttachment(id: string, name: string) {
+    if (!window.confirm(`Delete attachment "${name}"? This cannot be undone.`)) return;
+    try {
+      await api.del(`/expenses/attachments/${id}`);
+      toast('Attachment deleted');
+      if (preview?.id === id) setPreview(null);
+      qc.invalidateQueries({ queryKey: ['expense', expense.id] });
+      onChanged();
+    } catch (e: any) { toast(e.message, 'err'); }
+  }
+
+  async function retryAttachment(id: string) {
+    try {
+      await api.post(`/expenses/attachments/${id}/retry`);
+      toast('Conversion re-queued');
+      qc.invalidateQueries({ queryKey: ['expense', expense.id] });
+    } catch (e: any) { toast(e.message, 'err'); }
   }
 
   const set = (k: keyof NonNullable<typeof f>) => (e: any) => f && setF({ ...f, [k]: e.target.value });
@@ -287,17 +307,29 @@ function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onCl
           <div className="space-y-2">
             {data?.attachments?.map((a: any) => (
               <div key={a.id} className="flex items-center justify-between rounded-lg border border-line p-2 text-sm">
-                <span className="flex items-center gap-2">
-                  {a.status === 'ready' ? (
-                    <img src={`/api/expenses/attachments/${a.id}/preview`} alt="" className="h-10 w-8 rounded border border-line object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
-                  ) : (
-                    <Paperclip size={14} />
-                  )}
-                  {a.originalFilename}
-                </span>
-                <span className="flex items-center gap-2">
+                {a.status === 'ready' ? (
+                  <button type="button" className="flex min-w-0 items-center gap-2 text-left" onClick={() => setPreview({ id: a.id, name: a.originalFilename })} title="Click to preview">
+                    <img src={`/api/expenses/attachments/${a.id}/preview`} alt="" className="h-10 w-8 shrink-0 rounded border border-line object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
+                    <span className="truncate hover:underline">{a.originalFilename}</span>
+                  </button>
+                ) : (
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Paperclip size={14} className="shrink-0" />
+                    <span className="truncate">{a.originalFilename}</span>
+                  </span>
+                )}
+                <span className="flex shrink-0 items-center gap-2">
                   <Badge status={a.status}>{a.status}</Badge>
-                  {a.status === 'ready' && <a className="text-copper" href={`/api/expenses/attachments/${a.id}/download`} target="_blank" rel="noreferrer"><Download size={15} /></a>}
+                  {a.status === 'ready' && (
+                    <>
+                      <button className="text-muted hover:text-copper" onClick={() => setPreview({ id: a.id, name: a.originalFilename })} title="Preview"><Eye size={15} /></button>
+                      <a className="text-muted hover:text-copper" href={`/api/expenses/attachments/${a.id}/download`} target="_blank" rel="noreferrer" title="Download"><Download size={15} /></a>
+                    </>
+                  )}
+                  {a.status === 'failed' && (
+                    <button className="text-muted hover:text-copper" onClick={() => retryAttachment(a.id)} title="Retry conversion"><RefreshCw size={15} /></button>
+                  )}
+                  <button className="text-muted hover:text-red disabled:opacity-40" onClick={() => deleteAttachment(a.id, a.originalFilename)} disabled={locked} title={locked ? 'Locked — void the invoice first' : 'Delete attachment'}><Trash2 size={15} /></button>
                 </span>
               </div>
             ))}
@@ -305,6 +337,14 @@ function ExpenseDetail({ expense, onClose, onChanged }: { expense: Expense; onCl
           </div>
         </div>
       </div>
+      {preview && (
+        <Modal open onClose={() => setPreview(null)} title={preview.name} wide>
+          <iframe title="attachment preview" src={`/api/expenses/attachments/${preview.id}/download`} className="h-[75vh] w-full rounded-lg border border-line" />
+          <div className="flex justify-end pt-3">
+            <a className="btn-ghost" href={`/api/expenses/attachments/${preview.id}/download`} target="_blank" rel="noreferrer"><Download size={15} /> Download</a>
+          </div>
+        </Modal>
+      )}
     </Modal>
   );
 }

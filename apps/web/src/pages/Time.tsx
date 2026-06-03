@@ -197,83 +197,129 @@ function WeekTable({ weekStart, rows, onChanged, showEmployee, renderEmployeeFoo
   const colSep = 'border-l-2 border-line';
   const cellBorder = 'border-t border-r border-line';
 
+  // Flat-row index where each employee's job rows begin — keeps the keyboard-nav
+  // refs (`${r}:${c}`) aligned with `flat` even though we now render the body
+  // grouped by employee with interleaved header/total rows.
+  const empStarts = useMemo(() => {
+    const starts: number[] = [];
+    let acc = 0;
+    for (const emp of rows) { starts.push(acc); acc += emp.jobs.length; }
+    return starts;
+  }, [rows]);
+
+  // Day header (Mon..Sun + date) — reused at the top in single-employee mode and
+  // repeated above each employee in crew mode so the columns stay readable while
+  // scrolling. `label` fills the sticky left cell (employee name in crew mode).
+  const dayHeader = (label: ReactNode, key: string) => (
+    <tr key={key}>
+      <th className="th sticky left-0 border-r border-line bg-card normal-case text-ink">{label}</th>
+      {dates.map((d, i) => <th key={d} className={`th text-center ${i === 0 ? '' : colSep}`} colSpan={3}>{DAYS[i]}<div className="font-normal normal-case text-muted">{d.slice(5)}</div></th>)}
+      <th className={`th text-center ${colSep}`}>Total</th>
+    </tr>
+  );
+  const tierHeader = (key: string) => (
+    <tr key={key}>
+      <th className="th sticky left-0 border-r border-line bg-card"></th>
+      {dates.map((d) => TIERS.map((t, ti) => <th key={d + t} className={`th text-center ${ti === 0 ? colSep : ''}`}>{t.toUpperCase()}</th>))}
+      <th className={`th ${colSep}`}></th>
+    </tr>
+  );
+
+  // Per-employee column totals: one sum per tier column (ST/OT/DT × 7 days) plus
+  // a grand total, so the admin can sanity-check each person's week at a glance.
+  const totalsRow = (emp: EmpRow, key: string) => {
+    const colTotals = dates.map((d) => TIERS.map((t) => emp.jobs.reduce((s, j) => s + (Number(valueOf(j.days, emp.employee_id, j.job_id, d, t)) || 0), 0)));
+    const grand = colTotals.reduce((s, day) => s + day.reduce((a, b) => a + b, 0), 0);
+    return (
+      <tr key={key} className="bg-paper/60">
+        <td className="td sticky left-0 border-r border-line bg-paper text-xs font-semibold uppercase tracking-wide text-muted">Totals</td>
+        {colTotals.map((day, di) => day.map((v, ti) => (
+          <td key={`${di}:${ti}`} className={`td text-center font-semibold text-ink ${ti === 0 ? colSep : ''}`}>{v || ''}</td>
+        )))}
+        <td className={`td text-center font-bold ${colSep}`}>{grand || ''}</td>
+      </tr>
+    );
+  };
+
+  const jobRow = (emp: EmpRow, job: JobRow, r: number) => {
+    const rowTotal = dates.reduce(
+      (sum, d) => sum + TIERS.reduce((s, t) => s + (Number(valueOf(job.days, emp.employee_id, job.job_id, d, t)) || 0), 0),
+      0,
+    );
+    return (
+      <tr key={emp.employee_id + job.job_id}>
+        <td className="td sticky left-0 border-r border-line bg-card">
+          <div className="font-mono text-muted">{job.job_code}</div>
+        </td>
+        {dates.map((date, di) => {
+          const day = job.days.find((d) => d.date === date);
+          const locked = !!day?.invoice_id;
+          return TIERS.map((t, ti) => {
+            const c = di * TIERS.length + ti;
+            return (
+              <td key={date + t} className={`p-0 ${cellBorder} ${ti === 0 ? colSep : ''}`}>
+                <input
+                  ref={(el) => {
+                    if (el) refs.current.set(`${r}:${c}`, el);
+                    else refs.current.delete(`${r}:${c}`);
+                  }}
+                  className={`w-12 bg-transparent px-1 py-1.5 text-center outline-none focus:bg-copper-soft focus:ring-1 focus:ring-copper ${locked ? 'bg-paper text-muted' : ''}`}
+                  inputMode="decimal"
+                  value={valueOf(job.days, emp.employee_id, job.job_id, date, t)}
+                  disabled={locked}
+                  aria-label={`${emp.employee_name}, ${job.job_code}, ${DAYS[di]} ${t.toUpperCase()}`}
+                  title={locked ? 'Billed — locked' : `${emp.employee_name}, ${job.job_code}, ${date} ${t.toUpperCase()}`}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onPaste={(e) => handlePaste(e, r, c)}
+                  onChange={(e) => setEdits((prev) => ({ ...prev, [cellKey(emp.employee_id, job.job_id, date, t)]: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      focusCell(r + 1, c);
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      focusCell(r - 1, c);
+                    }
+                    // Tab / Shift+Tab move across columns natively (skipping locked cells).
+                  }}
+                  onBlur={(e) => commit(emp.employee_id, job.job_id, date, t, e.currentTarget.value, day?.[t] ?? 0)}
+                />
+              </td>
+            );
+          });
+        })}
+        <td className={`td text-center font-semibold ${colSep}`}>{rowTotal || ''}</td>
+      </tr>
+    );
+  };
+
   return (
     <div className="card overflow-x-auto">
       <table className="w-full border-collapse text-xs">
-        <thead>
-          <tr>
-            <th className="th sticky left-0 border-r border-line bg-card">{showEmployee ? 'Employee / Job' : 'Job'}</th>
-            {dates.map((d, i) => <th key={d} className={`th text-center ${i === 0 ? '' : colSep}`} colSpan={3}>{DAYS[i]}<div className="font-normal normal-case text-muted">{d.slice(5)}</div></th>)}
-            <th className={`th text-center ${colSep}`}>Total</th>
-          </tr>
-          <tr>
-            <th className="th sticky left-0 border-r border-line bg-card"></th>
-            {dates.map((d) => TIERS.map((t, ti) => <th key={d + t} className={`th text-center ${ti === 0 ? colSep : ''}`}>{t.toUpperCase()}</th>))}
-            <th className={`th ${colSep}`}></th>
-          </tr>
-        </thead>
+        {/* Single-employee mode keeps one header at the top; crew mode repeats a
+            header per employee in the body, so its <thead> stays empty. */}
+        {!showEmployee && (
+          <thead>
+            {dayHeader('Job', 'top-day')}
+            {tierHeader('top-tier')}
+          </thead>
+        )}
         <tbody>
-          {flat.map(({ emp, job, firstOfEmp, lastOfEmp }, r) => {
-            const rowTotal = dates.reduce(
-              (sum, d) => sum + TIERS.reduce((s, t) => s + (Number(valueOf(job.days, emp.employee_id, job.job_id, d, t)) || 0), 0),
-              0,
-            );
-            return (
-              <Fragment key={emp.employee_id + job.job_id}>
+          {rows.map((emp, empIdx) => (
+            <Fragment key={emp.employee_id}>
+              {showEmployee && dayHeader(<span className="font-semibold">{emp.employee_name}</span>, emp.employee_id + '-dh')}
+              {showEmployee && tierHeader(emp.employee_id + '-th')}
+              {emp.jobs.map((job, ji) => jobRow(emp, job, empStarts[empIdx] + ji))}
+              {totalsRow(emp, emp.employee_id + '-tot')}
+              {renderEmployeeFooter && (
                 <tr>
-                  <td className="td sticky left-0 border-r border-line bg-card">
-                    {showEmployee && firstOfEmp && <div className="font-semibold">{emp.employee_name}</div>}
-                    <div className="font-mono text-muted">{job.job_code}</div>
+                  <td colSpan={2 + totalCols} className="border-t border-line bg-paper/40 px-3 py-1.5">
+                    {renderEmployeeFooter(emp)}
                   </td>
-                  {dates.map((date, di) => {
-                    const day = job.days.find((d) => d.date === date);
-                    const locked = !!day?.invoice_id;
-                    return TIERS.map((t, ti) => {
-                      const c = di * TIERS.length + ti;
-                      return (
-                        <td key={date + t} className={`p-0 ${cellBorder} ${ti === 0 ? colSep : ''}`}>
-                          <input
-                            ref={(el) => {
-                              if (el) refs.current.set(`${r}:${c}`, el);
-                              else refs.current.delete(`${r}:${c}`);
-                            }}
-                            className={`w-12 bg-transparent px-1 py-1.5 text-center outline-none focus:bg-copper-soft focus:ring-1 focus:ring-copper ${locked ? 'bg-paper text-muted' : ''}`}
-                            inputMode="decimal"
-                            value={valueOf(job.days, emp.employee_id, job.job_id, date, t)}
-                            disabled={locked}
-                            aria-label={`${emp.employee_name}, ${job.job_code}, ${DAYS[di]} ${t.toUpperCase()}`}
-                            title={locked ? 'Billed — locked' : `${emp.employee_name}, ${job.job_code}, ${date} ${t.toUpperCase()}`}
-                            onFocus={(e) => e.currentTarget.select()}
-                            onPaste={(e) => handlePaste(e, r, c)}
-                            onChange={(e) => setEdits((prev) => ({ ...prev, [cellKey(emp.employee_id, job.job_id, date, t)]: e.target.value }))}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === 'ArrowDown') {
-                                e.preventDefault();
-                                focusCell(r + 1, c);
-                              } else if (e.key === 'ArrowUp') {
-                                e.preventDefault();
-                                focusCell(r - 1, c);
-                              }
-                              // Tab / Shift+Tab move across columns natively (skipping locked cells).
-                            }}
-                            onBlur={(e) => commit(emp.employee_id, job.job_id, date, t, e.currentTarget.value, day?.[t] ?? 0)}
-                          />
-                        </td>
-                      );
-                    });
-                  })}
-                  <td className={`td text-center font-semibold ${colSep}`}>{rowTotal || ''}</td>
                 </tr>
-                {lastOfEmp && renderEmployeeFooter && (
-                  <tr>
-                    <td colSpan={2 + totalCols} className="border-t border-line bg-paper/40 px-3 py-1.5">
-                      {renderEmployeeFooter(emp)}
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
+              )}
+            </Fragment>
+          ))}
         </tbody>
       </table>
     </div>
