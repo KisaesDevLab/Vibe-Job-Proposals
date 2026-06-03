@@ -3,6 +3,9 @@ on:
   pull_request:
   push:
     branches: [main]
+# Run the bundled JS actions on Node 24 (their Node 20 runtime is deprecated).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   build:
     runs-on: ubuntu-latest

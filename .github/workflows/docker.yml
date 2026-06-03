@@ -2,6 +2,9 @@ name: Publish Docker image
 on:
   push:
     tags: ['v*.*.*']
+# Run the bundled JS actions on Node 24 (their Node 20 runtime is deprecated).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   publish:
     runs-on: ubuntu-latest
