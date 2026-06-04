@@ -15,16 +15,100 @@ const PER_JOB_REPORTS = [
 ] as const;
 
 export function ReportsPage() {
-  const [tab, setTab] = useState<'per-job' | 'job-profit' | 'rate-sheet'>('per-job');
+  const [tab, setTab] = useState<'per-job' | 'payroll' | 'job-profit' | 'rate-sheet'>('per-job');
   return (
     <div>
-      <PageHeader title="Reports" subtitle="Hours, expenses, profitability & rates" />
+      <PageHeader title="Reports" subtitle="Hours, payroll, expenses, profitability & rates" />
       <div className="mb-5 flex gap-2 border-b border-line">
         <button onClick={() => setTab('per-job')} className={`px-3 py-2 text-sm font-medium ${tab === 'per-job' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>Per-job reports</button>
+        <button onClick={() => setTab('payroll')} className={`px-3 py-2 text-sm font-medium ${tab === 'payroll' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>Payroll</button>
         <button onClick={() => setTab('job-profit')} className={`px-3 py-2 text-sm font-medium ${tab === 'job-profit' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>Job profit</button>
         <button onClick={() => setTab('rate-sheet')} className={`px-3 py-2 text-sm font-medium ${tab === 'rate-sheet' ? 'border-b-2 border-copper text-copper' : 'text-muted'}`}>Customer rate sheet</button>
       </div>
-      {tab === 'per-job' ? <PerJobReports /> : tab === 'job-profit' ? <JobProfitReport /> : <RateSheet />}
+      {tab === 'per-job' ? <PerJobReports /> : tab === 'payroll' ? <PayrollReport /> : tab === 'job-profit' ? <JobProfitReport /> : <RateSheet />}
+    </div>
+  );
+}
+
+interface PayrollRow { employee: string; st: string; ot: string; dt: string; total: string; }
+
+function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function PayrollReport() {
+  // Default to a typical two-week payroll window ending today.
+  const [from, setFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 13); return isoDate(d); });
+  const [to, setTo] = useState(() => isoDate(new Date()));
+  const rangeValid = /^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to) && from <= to;
+  const { data, isFetching } = useQuery({
+    queryKey: ['payroll', from, to],
+    queryFn: () => api.get<PayrollRow[]>(`/reports/payroll?from=${from}&to=${to}`),
+    enabled: rangeValid,
+  });
+
+  const totals = useMemo(() => {
+    const base = { st: 0, ot: 0, dt: 0, total: 0 };
+    if (!data) return base;
+    return data.reduce((a, r) => ({
+      st: a.st + Number(r.st), ot: a.ot + Number(r.ot), dt: a.dt + Number(r.dt), total: a.total + Number(r.total),
+    }), base);
+  }, [data]);
+
+  const hrs = (v: number | string) => NUM_FMT.format(Number(v));
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div>
+          <label className="label">From</label>
+          <input type="date" className="input" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">To</label>
+          <input type="date" className="input" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
+        </div>
+        {rangeValid && (
+          <a className="btn-ghost" href={`/api/reports/payroll?from=${from}&to=${to}&format=csv`}><Download size={15} /> CSV</a>
+        )}
+      </div>
+
+      {!rangeValid ? <Empty title="Enter a valid date range" hint="“From” must be on or before “To”" />
+        : isFetching ? <Empty title="Loading…" />
+        : !data?.length ? <Empty title="No hours in this date range" />
+        : (
+          <div className="card overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr>
+                  <th className="th">Employee</th>
+                  <th className="th text-right">ST</th>
+                  <th className="th text-right">OT</th>
+                  <th className="th text-right">DT</th>
+                  <th className="th text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((r) => (
+                  <tr key={r.employee} className="hover:bg-paper">
+                    <td className="td font-medium">{r.employee}</td>
+                    <td className="td text-right">{hrs(r.st)}</td>
+                    <td className="td text-right">{hrs(r.ot)}</td>
+                    <td className="td text-right">{hrs(r.dt)}</td>
+                    <td className="td text-right font-semibold">{hrs(r.total)}</td>
+                  </tr>
+                ))}
+                <tr className="border-t-2 border-line font-semibold">
+                  <td className="td">Totals ({data.length} employee{data.length === 1 ? '' : 's'})</td>
+                  <td className="td text-right">{hrs(totals.st)}</td>
+                  <td className="td text-right">{hrs(totals.ot)}</td>
+                  <td className="td text-right">{hrs(totals.dt)}</td>
+                  <td className="td text-right">{hrs(totals.total)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
     </div>
   );
 }

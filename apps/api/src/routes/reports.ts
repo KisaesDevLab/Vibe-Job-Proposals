@@ -85,6 +85,33 @@ reportsRouter.get(
   }),
 );
 
+// Payroll — total hours per employee across ALL jobs in a date range.
+// Hours-only (no rates/cost): the figures you key into payroll. Includes every
+// entry in the window regardless of billing status, since the hours were worked.
+reportsRouter.get(
+  '/payroll',
+  ah(async (req, res) => {
+    const { from, to, format = 'json' } = req.query as Record<string, string>;
+    if (!from || !to) throw new HttpError(400, 'bad_request', 'from and to dates required');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new HttpError(400, 'bad_request', 'dates must be YYYY-MM-DD');
+    }
+    if (from > to) throw new HttpError(400, 'bad_request', 'from must be on or before to');
+    const rows = await rawsql<any[]>`
+      SELECT e.name AS employee,
+        SUM(te.st_hours)::numeric(10,2) AS st,
+        SUM(te.ot_hours)::numeric(10,2) AS ot,
+        SUM(te.dt_hours)::numeric(10,2) AS dt,
+        SUM(te.st_hours + te.ot_hours + te.dt_hours)::numeric(10,2) AS total
+      FROM time_entries te
+      JOIN employees e ON e.id = te.employee_id
+      WHERE te.work_date BETWEEN ${from}::date AND ${to}::date
+      GROUP BY e.id, e.name
+      ORDER BY e.name`;
+    respond(res, rows, format, `payroll_${from}_to_${to}`);
+  }),
+);
+
 // Report 1 — Hours by Employee for Job/Invoice
 reportsRouter.get(
   '/employee-hours',
