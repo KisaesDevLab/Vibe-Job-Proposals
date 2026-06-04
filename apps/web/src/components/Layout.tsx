@@ -61,9 +61,18 @@ export function Layout({ children }: { children: ReactNode }) {
   useEffect(() => { setNavOpen(false); }, [path]);
 
   async function logout() {
-    await api.post('/auth/logout');
-    refresh();
-    window.location.href = '/login';
+    // Fail-safe: attempt the server-side logout, but even if it rejects
+    // (network/5xx) still clear client state and redirect, rather than leaving
+    // an unhandled rejection and the user stuck on a half-logged-out screen.
+    try {
+      await api.post('/auth/logout');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('logout request failed; clearing session client-side', err);
+    } finally {
+      refresh();
+      window.location.href = '/login';
+    }
   }
 
   return (
