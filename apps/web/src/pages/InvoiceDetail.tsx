@@ -175,8 +175,8 @@ function EmailModal({ id, inv, onClose }: { id: string; inv: any; onClose: () =>
 function DraftView({ data }: { id: string; data: any }) {
   const p = data.preview;
   return (
-    <div className="grid grid-cols-3 gap-6">
-      <div className="col-span-2 space-y-4">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="space-y-4 lg:col-span-2">
         {p?.blockers?.length > 0 && (
           <div className="rounded-lg bg-red-soft p-3 text-sm text-red">
             <div className="font-semibold">Finalize blocked:</div>
@@ -256,8 +256,8 @@ function SnapshotView({ inv, lines }: { inv: any; lines: any[] }) {
   }, [lines]);
 
   return (
-    <div className="grid grid-cols-3 gap-6">
-      <div className="col-span-2 card overflow-hidden">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="card overflow-hidden lg:col-span-2">
         <table className="w-full text-sm">
           <tbody>
             {renderLines.map((l) => (

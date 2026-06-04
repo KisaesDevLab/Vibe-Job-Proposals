@@ -27,8 +27,8 @@ export function LoginPage() {
   }
 
   return (
-    <div className="grid h-full place-items-center bg-paper">
-      <form onSubmit={submit} className="card w-full max-w-sm p-8">
+    <div className="grid h-full place-items-center bg-paper p-4">
+      <form onSubmit={submit} className="card w-full max-w-sm p-6 sm:p-8">
         <div className="mb-6 flex items-center gap-3">
           <div className="grid h-11 w-11 place-items-center rounded-xl bg-copper text-white"><Zap size={24} /></div>
           <div>

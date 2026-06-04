@@ -18,8 +18,10 @@ import {
   Minimize2,
   Type,
   Upload,
+  Menu,
+  X,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { usePrefs, setFontScale, setWideMode, type FontScale } from '@/lib/prefs';
@@ -51,7 +53,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const [emailOpen, setEmailOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false); // mobile drawer
   const { fontScale, wideMode } = usePrefs();
+
+  // Close the mobile drawer whenever the route changes (e.g. after tapping a
+  // nav link) so it doesn't stay open over the new page.
+  useEffect(() => { setNavOpen(false); }, [path]);
 
   async function logout() {
     await api.post('/auth/logout');
@@ -61,13 +68,25 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-full">
-      <aside className="flex w-60 flex-col bg-ink text-paper">
+      {/* Backdrop behind the drawer on mobile */}
+      {navOpen && (
+        <div className="fixed inset-0 z-30 bg-ink/50 lg:hidden" onClick={() => setNavOpen(false)} aria-hidden="true" />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-60 max-w-[80%] transform flex-col bg-ink text-paper transition-transform duration-200 lg:static lg:z-auto lg:max-w-none lg:translate-x-0 ${
+          navOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
         <div className="flex items-center gap-2 px-5 py-5">
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-copper text-white"><Zap size={20} /></div>
-          <div>
+          <div className="flex-1">
             <div className="font-bold leading-tight">Darrow</div>
             <div className="text-xs text-paper/60">Time &amp; Invoicing</div>
           </div>
+          {/* Close button — drawer only */}
+          <button onClick={() => setNavOpen(false)} className="rounded p-1.5 text-paper/60 hover:bg-white/10 hover:text-white lg:hidden" aria-label="Close menu">
+            <X size={18} />
+          </button>
         </div>
         <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-2">
           {NAV.map((g) => (
@@ -78,7 +97,7 @@ export function Layout({ children }: { children: ReactNode }) {
                   const Icon = it.icon;
                   const active = path.startsWith(it.to);
                   return (
-                    <Link key={it.to} to={it.to} className={`navlink ${active ? 'navlink-active' : ''}`}>
+                    <Link key={it.to} to={it.to} onClick={() => setNavOpen(false)} className={`navlink ${active ? 'navlink-active' : ''}`}>
                       <Icon size={16} /> {it.label}
                     </Link>
                   );
@@ -93,7 +112,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <button
               onClick={() => setWideMode(!wideMode)}
               title={wideMode ? 'Switch to comfortable width' : 'Switch to full width'}
-              className="rounded p-1.5 text-paper/60 hover:bg-white/10 hover:text-white"
+              className="hidden rounded p-1.5 text-paper/60 hover:bg-white/10 hover:text-white lg:block"
             >
               {wideMode ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
             </button>
@@ -120,8 +139,20 @@ export function Layout({ children }: { children: ReactNode }) {
       </aside>
       <UserEmailModal open={emailOpen} onClose={() => setEmailOpen(false)} />
       <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
-      <main className="flex-1 overflow-y-auto">
-        <div className={`${wideMode ? 'w-full' : 'mx-auto max-w-7xl'} px-8 py-8`}>{children}</div>
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* Mobile top bar with hamburger — hidden on lg where the sidebar is always visible */}
+        <header className="flex items-center gap-3 border-b border-line bg-card px-4 py-3 lg:hidden">
+          <button onClick={() => setNavOpen(true)} className="rounded-lg p-1.5 text-ink hover:bg-paper" aria-label="Open menu">
+            <Menu size={22} />
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="grid h-7 w-7 place-items-center rounded-md bg-copper text-white"><Zap size={16} /></div>
+            <span className="font-bold">Darrow</span>
+          </div>
+        </header>
+        <div className="flex-1 overflow-y-auto">
+          <div className={`${wideMode ? 'w-full' : 'mx-auto max-w-7xl'} px-4 py-6 sm:px-6 lg:px-8 lg:py-8`}>{children}</div>
+        </div>
       </main>
     </div>
   );
@@ -158,12 +189,12 @@ function FontScalePicker({ value, onChange }: { value: FontScale; onChange: (s: 
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
-    <div className="mb-6 flex items-end justify-between">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="min-w-0">
+        <h1 className="text-xl font-bold tracking-tight sm:text-2xl">{title}</h1>
         {subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
