@@ -1,6 +1,6 @@
 import { Fragment, useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Plus, LayoutGrid, User } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, LayoutGrid, User, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/Layout';
 import { Skeleton, Empty, Modal, toast } from '@/components/ui';
@@ -71,7 +71,7 @@ export function TimePage() {
 // saving/refetching never remounts an input (focus is preserved), plus keyboard
 // navigation — Tab/Shift+Tab across columns, Enter/Arrow-Down to move down,
 // Arrow-Up to move up, and select-on-focus so you can type without clicking.
-function WeekTable({ weekStart, rows, onChanged, showEmployee, renderEmployeeFooter }: { weekStart: string; rows: EmpRow[]; employeeId?: string; onChanged: () => void; showEmployee: boolean; renderEmployeeFooter?: (emp: EmpRow) => ReactNode }) {
+function WeekTable({ weekStart, rows, onChanged, showEmployee, renderEmployeeFooter, onDeleteJob }: { weekStart: string; rows: EmpRow[]; employeeId?: string; onChanged: () => void; showEmployee: boolean; renderEmployeeFooter?: (emp: EmpRow) => ReactNode; onDeleteJob?: (emp: EmpRow, job: JobRow) => void }) {
   const dates = useMemo(() => DAYS.map((_, i) => addDays(weekStart, i)), [weekStart]);
   const totalCols = dates.length * TIERS.length;
   const [edits, setEdits] = useState<Record<string, string>>({});
@@ -246,10 +246,36 @@ function WeekTable({ weekStart, rows, onChanged, showEmployee, renderEmployeeFoo
       (sum, d) => sum + TIERS.reduce((s, t) => s + (Number(valueOf(job.days, emp.employee_id, job.job_id, d, t)) || 0), 0),
       0,
     );
+    const hasLocked = job.days.some((d) => !!d.invoice_id);
+    function removeRow() {
+      if (hasLocked) return;
+      if (rowTotal > 0 && !window.confirm(`Remove ${job.job_code} for ${emp.employee_name} this week? This deletes ${rowTotal} saved hour${rowTotal === 1 ? '' : 's'}.`)) return;
+      // Drop any local typed overrides for this job so re-adding it starts clean.
+      setEdits((prev) => {
+        const next = { ...prev };
+        const prefix = `${emp.employee_id}|${job.job_id}|`;
+        for (const k of Object.keys(next)) if (k.startsWith(prefix)) delete next[k];
+        return next;
+      });
+      onDeleteJob?.(emp, job);
+    }
     return (
       <tr key={emp.employee_id + job.job_id}>
         <td className="td sticky left-0 border-r border-line bg-card">
-          <div className="font-mono text-muted">{job.job_code}</div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-mono text-muted">{job.job_code}</span>
+            {onDeleteJob && (
+              <button
+                type="button"
+                className="shrink-0 text-muted/40 hover:text-red disabled:cursor-not-allowed disabled:opacity-30"
+                title={hasLocked ? 'Contains billed hours — void the invoice first' : 'Remove this job row'}
+                disabled={hasLocked}
+                onClick={removeRow}
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
+          </div>
         </td>
         {dates.map((date, di) => {
           const day = job.days.find((d) => d.date === date);
@@ -335,6 +361,25 @@ function CrewGrid({ weekStart }: { weekStart: string }) {
   const [extraByEmp, setExtraByEmp] = useState<Record<string, { job_id: string; job_code: string }[]>>({});
   const invalidate = () => qc.invalidateQueries({ queryKey: ['time', weekStart] });
 
+  async function deleteJob(emp: EmpRow, job: JobRow) {
+    // Always drop a matching unsaved scratch row.
+    setExtraByEmp((prev) => {
+      const cur = prev[emp.employee_id] ?? [];
+      if (!cur.some((j) => j.job_id === job.job_id)) return prev;
+      return { ...prev, [emp.employee_id]: cur.filter((j) => j.job_id !== job.job_id) };
+    });
+    // If the job has persisted hours this week, delete them on the server.
+    const persisted = data?.employees.find((e) => e.employee_id === emp.employee_id)?.jobs.some((j) => j.job_id === job.job_id);
+    if (!persisted) return;
+    try {
+      await api.del('/time/job-week', { employee_id: emp.employee_id, job_id: job.job_id, week_start: weekStart });
+      toast('Job row removed');
+      invalidate();
+    } catch (e: any) {
+      toast(e.message, 'err');
+    }
+  }
+
   // Drop scratch rows once the server confirms a job has saved hours for the week.
   useEffect(() => {
     if (!data?.employees) return;
@@ -371,6 +416,7 @@ function CrewGrid({ weekStart }: { weekStart: string }) {
           weekStart={weekStart}
           rows={augmentedRows}
           onChanged={invalidate}
+          onDeleteJob={deleteJob}
           showEmployee
           renderEmployeeFooter={(emp) => (
             <AddJobInline
@@ -404,6 +450,19 @@ function EmployeeWeek({ weekStart }: { weekStart: string }) {
   const [extraJobs, setExtraJobs] = useState<{ job_id: string; job_code: string }[]>([]);
   const invalidate = () => qc.invalidateQueries({ queryKey: ['time-emp', weekStart, employeeId] });
 
+  async function deleteJob(_emp: EmpRow, job: JobRow) {
+    setExtraJobs((prev) => prev.filter((j) => j.job_id !== job.job_id));
+    const persisted = data?.employees[0]?.jobs.some((j) => j.job_id === job.job_id);
+    if (!persisted) return;
+    try {
+      await api.del('/time/job-week', { employee_id: employeeId, job_id: job.job_id, week_start: weekStart });
+      toast('Job row removed');
+      invalidate();
+    } catch (e: any) {
+      toast(e.message, 'err');
+    }
+  }
+
   const empName = emps?.find((e) => e.id === employeeId)?.name ?? '';
   // merge existing rows with locally-added empty job rows
   const base: EmpRow = data?.employees[0] ?? { employee_id: employeeId, employee_name: empName, jobs: [] };
@@ -426,7 +485,7 @@ function EmployeeWeek({ weekStart }: { weekStart: string }) {
       </div>
       {!employeeId ? <Empty title="Select an employee to enter their week" /> : isLoading ? <Skeleton rows={5} /> : (
         rows[0].jobs.length === 0 ? <Empty title={`No jobs for ${empName} this week`} hint="Add a job code above to start entering hours" /> :
-        <WeekTable weekStart={weekStart} rows={rows} onChanged={invalidate} showEmployee={false} />
+        <WeekTable weekStart={weekStart} rows={rows} onChanged={invalidate} onDeleteJob={deleteJob} showEmployee={false} />
       )}
     </div>
   );

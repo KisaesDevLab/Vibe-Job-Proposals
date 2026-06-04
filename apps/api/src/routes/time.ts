@@ -139,6 +139,38 @@ timeRouter.delete(
   }),
 );
 
+// Remove an entire job row from a week: deletes every entry for one
+// (employee, job) across the Mon–Sun window. All-or-nothing — if any day in the
+// week is billed, nothing is deleted (void the invoice first).
+const jobWeekDeleteSchema = z.object({
+  employee_id: z.string().uuid(),
+  job_id: z.string().uuid(),
+  week_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+timeRouter.delete(
+  '/job-week',
+  ah(async (req, res) => {
+    const { employee_id, job_id, week_start } = jobWeekDeleteSchema.parse(req.body);
+    const week_end = addDays(week_start, 6);
+    const deleted = await rawsql.begin(async (tx: any) => {
+      const rows = await tx`SELECT id, invoice_id FROM time_entries
+        WHERE employee_id=${employee_id} AND job_id=${job_id}
+          AND work_date BETWEEN ${week_start}::date AND ${week_end}::date
+        FOR UPDATE`;
+      if (rows.some((r: any) => r.invoice_id)) {
+        throw new HttpError(409, 'locked', 'Some hours in this week are billed and locked');
+      }
+      if (rows.length) {
+        await tx`DELETE FROM time_entries
+          WHERE employee_id=${employee_id} AND job_id=${job_id}
+            AND work_date BETWEEN ${week_start}::date AND ${week_end}::date`;
+      }
+      return rows.length;
+    });
+    res.json(ok({ deleted }));
+  }),
+);
+
 // copy all unbilled rows from one week to another
 timeRouter.post(
   '/copy-week',
