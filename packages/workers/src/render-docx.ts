@@ -55,9 +55,14 @@ export function startRenderDocxWorker(): Worker {
   const worker = new Worker('render-docx', async (job) => render(job.data.invoiceId), { connection, concurrency: 1 });
   worker.on('failed', async (job, err) => {
     logger.error('render-docx failed', { invoiceId: job?.data?.invoiceId, err: String(err), attempts: job?.attemptsMade });
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
-      await sql`UPDATE invoices SET docx_status='failed', generation_error=${String(err)} WHERE id=${job.data.invoiceId}`;
+    try {
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
+        await sql`UPDATE invoices SET docx_status='failed', generation_error=${String(err).slice(0, 300)} WHERE id=${job.data.invoiceId}`;
+      }
+    } catch (dbErr) {
+      logger.error('render-docx failed-handler could not persist status', { invoiceId: job?.data?.invoiceId, err: String(dbErr) });
     }
   });
+  worker.on('error', (err) => logger.error('render-docx worker error', { err: String(err) }));
   return worker;
 }

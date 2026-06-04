@@ -22,13 +22,20 @@ export async function requireAuth(req: AuthedRequest, res: Response, next: NextF
     res.status(401).json(fail('unauthorized', 'Authentication required'));
     return;
   }
-  const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-  if (!u || !u.active) {
-    res.status(401).json(fail('unauthorized', 'Session invalid'));
-    return;
+  try {
+    const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!u || !u.active) {
+      res.status(401).json(fail('unauthorized', 'Session invalid'));
+      return;
+    }
+    req.user = { id: u.id, username: u.username, role: u.role };
+    next();
+  } catch (err) {
+    // Mounted directly (not via ah()); under Express 4 an async rejection won't
+    // reach errorHandler on its own. Forward it so a DB outage returns the
+    // standard 500 envelope instead of an unhandledRejection.
+    next(err);
   }
-  req.user = { id: u.id, username: u.username, role: u.role };
-  next();
 }
 
 export function requireRole(...roles: Array<'admin' | 'owner'>) {

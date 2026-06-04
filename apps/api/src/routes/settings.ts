@@ -8,6 +8,7 @@ import { ok, fail, settingsSchema, markupMapSchema, EXPENSE_CATEGORIES } from '@
 import { db, settings, settingsMarkupDefaults } from '@darrow/db';
 import { eq } from 'drizzle-orm';
 import { ah, HttpError } from '../error-handler.js';
+import { attachStreamErrorHandler } from '../http-stream.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 import { paths } from '../storage.js';
 import { writeAudit } from '../audit.js';
@@ -354,7 +355,9 @@ settingsRouter.get(
     res.setHeader('Content-Type', 'application/gzip');
     res.setHeader('Content-Length', String(st.size));
     res.setHeader('Content-Disposition', `attachment; filename="${req.params.filename}"`);
-    createReadStream(p).pipe(res);
+    const stream = createReadStream(p);
+    attachStreamErrorHandler(stream, res, { route: 'settings.backupDownload', filename: req.params.filename });
+    stream.pipe(res);
   }),
 );
 

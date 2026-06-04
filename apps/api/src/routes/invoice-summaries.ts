@@ -5,6 +5,7 @@ import {
 } from '@darrow/shared';
 import { sql as rawsql } from '@darrow/db';
 import { ah, HttpError } from '../error-handler.js';
+import { attachStreamErrorHandler } from '../http-stream.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 import {
   createDraft, loadSummary, updateDraft, addMembers, removeMembers,
@@ -159,6 +160,8 @@ invoiceSummariesRouter.get(
       return res.status(404).json(fail('not_ready', 'Summary PDF not generated yet'));
     }
     res.type('application/pdf').setHeader('Content-Disposition', `attachment; filename="${row.billed_reference}.pdf"`);
-    createReadStream(row.generated_pdf_path).pipe(res);
+    const stream = createReadStream(row.generated_pdf_path);
+    attachStreamErrorHandler(stream, res, { route: 'invoice-summaries.pdf', summaryId: req.params.id });
+    stream.pipe(res);
   }),
 );

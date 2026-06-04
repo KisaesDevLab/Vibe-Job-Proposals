@@ -5,6 +5,8 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null });
+// Prevent an unhandled ioredis 'error' from crashing the API process.
+connection.on('error', (err: unknown) => logger.error('queue redis connection error', { err: String(err) }));
 
 export const QUEUE_NAMES = {
   imageToPdf: 'image-to-pdf',

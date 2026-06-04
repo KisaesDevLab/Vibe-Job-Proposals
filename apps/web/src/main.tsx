@@ -49,7 +49,16 @@ function handleAuthError(err: unknown) {
 
 const queryClient: QueryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } },
-  queryCache: new QueryCache({ onError: handleAuthError }),
+  // Queries rarely define their own onError, so a non-401 failure would
+  // otherwise show as an endless skeleton / empty table. Surface it once here.
+  // (401s are handled by handleAuthError.) Mutations keep their per-call onError,
+  // so the mutation cache stays auth-only to avoid double-toasting.
+  queryCache: new QueryCache({
+    onError: (err) => {
+      if (handleAuthError(err)) return;
+      toast(err instanceof ApiError ? err.message : 'Something went wrong loading data', 'err');
+    },
+  }),
   mutationCache: new MutationCache({ onError: handleAuthError }),
 });
 

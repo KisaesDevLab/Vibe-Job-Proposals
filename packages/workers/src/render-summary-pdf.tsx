@@ -299,9 +299,14 @@ export function startRenderSummaryPdfWorker(): Worker {
   const worker = new Worker('render-summary-pdf', async (job) => render(job.data.summaryId), { connection, concurrency: 1 });
   worker.on('failed', async (job, err) => {
     logger.error('render-summary-pdf failed', { summaryId: job?.data?.summaryId, err: String(err), attempts: job?.attemptsMade });
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 2)) {
-      await sql`UPDATE invoice_summaries SET pdf_status = 'failed', pdf_error = ${String(err)} WHERE id = ${job.data.summaryId}`;
+    try {
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 2)) {
+        await sql`UPDATE invoice_summaries SET pdf_status = 'failed', pdf_error = ${String(err).slice(0, 300)} WHERE id = ${job.data.summaryId}`;
+      }
+    } catch (dbErr) {
+      logger.error('render-summary-pdf failed-handler could not persist status', { summaryId: job?.data?.summaryId, err: String(dbErr) });
     }
   });
+  worker.on('error', (err) => logger.error('render-summary-pdf worker error', { err: String(err) }));
   return worker;
 }

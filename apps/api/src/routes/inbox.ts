@@ -7,6 +7,7 @@ import { ok, fail, expenseSchema } from '@darrow/shared';
 import { db, inboxDocuments, expenses, expenseAttachments } from '@darrow/db';
 import { eq, desc } from 'drizzle-orm';
 import { ah, HttpError } from '../error-handler.js';
+import { attachStreamErrorHandler } from '../http-stream.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 import { paths } from '../storage.js';
 import { writeAudit } from '../audit.js';
@@ -89,7 +90,9 @@ inboxRouter.get(
     const [doc] = await db.select().from(inboxDocuments).where(eq(inboxDocuments.id, req.params.id));
     if (!doc || !existsSync(doc.storedPath)) return res.status(404).end();
     res.type('application/pdf');
-    createReadStream(doc.storedPath).pipe(res);
+    const stream = createReadStream(doc.storedPath);
+    attachStreamErrorHandler(stream, res, { route: 'inbox.download', docId: req.params.id });
+    stream.pipe(res);
   }),
 );
 
@@ -111,7 +114,9 @@ inboxRouter.get(
     }
     if (!existsSync(thumb)) return res.status(500).json(fail('thumb_failed', 'Could not render thumbnail'));
     res.type('image/png');
-    createReadStream(thumb).pipe(res);
+    const stream = createReadStream(thumb);
+    attachStreamErrorHandler(stream, res, { route: 'inbox.preview', docId: req.params.id });
+    stream.pipe(res);
   }),
 );
 

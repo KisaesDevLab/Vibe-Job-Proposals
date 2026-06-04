@@ -10,6 +10,7 @@ import { redis } from '../redis.js';
 import { ah, HttpError } from '../error-handler.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 import { writeAudit } from '../audit.js';
+import { logger } from '../logger.js';
 import { encryptSecret, decryptSecret } from '../crypto.js';
 
 export const authRouter = Router();
@@ -41,7 +42,10 @@ authRouter.post(
 );
 
 authRouter.post('/logout', (req, res) => {
-  req.session.destroy(() => {
+  req.session.destroy((err) => {
+    // Clear the cookie regardless so the client is logged out, but don't
+    // silently swallow a store failure — the server-side session may persist.
+    if (err) logger.warn('session destroy failed during logout', { err: String(err) });
     res.clearCookie('connect.sid');
     res.json(ok({ loggedOut: true }));
   });

@@ -47,6 +47,19 @@ async function main() {
   logger.info('workers started', { queues: ['image-to-pdf', 'inbox-to-pdf', 'render-docx', 'docx-to-pdf', 'render-package', 'render-summary-pdf', 'send-invoice-email'] });
 }
 
+// Process-level safety nets. Per-worker 'failed'/'error' handlers cover job and
+// connection errors, but a stray rejection (e.g. inside an event callback) or an
+// unexpected throw should be logged rather than vanish or crash silently.
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandledRejection in workers', { err: String(reason) });
+});
+process.on('uncaughtException', (err: Error) => {
+  // State is unknown after an uncaught exception — log and exit so the
+  // orchestrator (compose restart: unless-stopped) brings us back clean.
+  logger.error('uncaughtException in workers — exiting', { err: String(err), stack: err?.stack });
+  process.exit(1);
+});
+
 main().catch((err) => {
   logger.error('workers fatal', { err: String(err) });
   process.exit(1);

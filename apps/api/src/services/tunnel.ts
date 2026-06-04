@@ -89,9 +89,15 @@ async function detectNetworkName(docker: Docker): Promise<string> {
  *  `docker compose --profile tunnel up` for cloudflared. */
 async function ensureCloudflaredRunning(connectorToken: string): Promise<void> {
   let docker: Docker;
-  try { docker = new Docker(); } catch (err) {
-    logger.warn('docker socket unavailable; cloudflared not started automatically', { err: String(err) });
-    return;
+  try {
+    docker = new Docker();
+  } catch (err) {
+    // Fail CLOSED: if we can't reach the Docker socket we cannot start the
+    // cloudflared container. Previously this returned void and the caller went
+    // on to mark the tunnel 'connected' — a fail-open that misreports a tunnel
+    // that was never actually running. Throw so provisionTunnel surfaces it.
+    logger.error('docker socket unavailable; cannot start cloudflared', { err: String(err) });
+    throw new Error('Docker socket unavailable — cannot start the cloudflared tunnel container');
   }
   const network = await detectNetworkName(docker);
 
@@ -210,7 +216,15 @@ export async function provisionTunnel(input: ProvisionInput): Promise<ProvisionR
 
 export async function disableTunnel(): Promise<void> {
   const row = await loadTunnelSettings();
-  const token = getApiToken(row);
+  // A rotated/lost TUNNEL_ENC_KEY makes getApiToken throw. Don't let that abort
+  // teardown — we still want to stop the local container and clear DB state.
+  // Without the token we just skip the (optional) Cloudflare-side cleanup.
+  let token: string | null = null;
+  try {
+    token = getApiToken(row);
+  } catch (err) {
+    logger.warn('could not decrypt CF API token during disable; skipping Cloudflare-side cleanup', { err: String(err) });
+  }
   await stopCloudflared();
   if (token && row.tunnel_id && row.cf_account_id) {
     if (row.cf_zone_id && row.tunnel_subdomain && row.cf_zone_name) {

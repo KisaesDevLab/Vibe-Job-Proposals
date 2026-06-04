@@ -37,11 +37,17 @@ async function send(emailId: string): Promise<void> {
   const plan = resolveSmtp(user ? profileOf(user) : null, global ? profileOf(global) : null);
   if (!plan.ok) throw new Error('SMTP not configured (neither the sending user nor the company relay is enabled)');
 
-  const key = process.env.SMTP_ENC_KEY;
+  // Fail CLOSED: when the resolver says a password is required, we must obtain
+  // it or abort. Previously a missing SMTP_ENC_KEY (or missing/corrupt
+  // ciphertext) silently left `password` undefined and the worker attempted an
+  // unauthenticated send — exactly the fail-open we don't want on a security path.
   let password: string | undefined;
-  if (plan.passwordSource && key) {
+  if (plan.passwordSource) {
+    const key = process.env.SMTP_ENC_KEY;
+    if (!key) throw new Error('SMTP_ENC_KEY is not configured; cannot decrypt the SMTP password');
     const enc = plan.passwordSource === 'user' ? user?.smtp_password_enc : global?.smtp_password_enc;
-    if (enc) password = decryptSecret(enc, key);
+    if (!enc) throw new Error('SMTP password expected for this profile but no encrypted credential was found');
+    password = decryptSecret(enc, key); // throws (fail-closed) on a bad key / auth-tag mismatch
   }
 
   const transport = nodemailer.createTransport({
@@ -72,11 +78,26 @@ async function send(emailId: string): Promise<void> {
   logger.info('email sent', { emailId, messageId: info.messageId, credsSource: plan.credsSource, from: plan.from.address });
 }
 
+// Bounded, single-line error for the operator-visible `invoice_emails.error`
+// column. We persist only the message (never the stack), capped, so SMTP-server
+// diagnostics or decrypt-config text can't bloat or leak through the UI; the
+// full error is logged server-side.
+function safeEmailError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.replace(/\s+/g, ' ').slice(0, 300);
+}
+
 export function startSendEmailWorker(): Worker {
   const worker = new Worker('send-invoice-email', async (job) => send(job.data.emailId), { connection, concurrency: 2 });
   worker.on('failed', async (job, err) => {
     logger.error('send-email failed', { emailId: job?.data?.emailId, err: String(err) });
-    if (job) await sql`UPDATE invoice_emails SET error=${String(err)} WHERE id=${job.data.emailId}`;
+    // The DB write here can itself fail (DB down); guard it so the failure
+    // handler never produces an unhandled rejection.
+    try {
+      if (job) await sql`UPDATE invoice_emails SET error=${safeEmailError(err)} WHERE id=${job.data.emailId}`;
+    } catch (dbErr) {
+      logger.error('send-email failed-handler could not persist error', { emailId: job?.data?.emailId, err: String(dbErr) });
+    }
   });
   return worker;
 }

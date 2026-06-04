@@ -128,6 +128,8 @@ async function main() {
   console.log(`\nAUDIT: ${pass} passed, ${fail} failed`);
   if (fail) console.log('FAILED:\n' + fails.map((f) => '  - ' + f).join('\n'));
   await sql.end();
-  process.exit(0);
+  // Exit non-zero when any check failed so CI / operators don't read a failed
+  // audit run as success.
+  process.exit(fail > 0 ? 1 : 0);
 }
 main().catch((e) => { console.error('AUDIT CRASH', e); process.exit(1); });

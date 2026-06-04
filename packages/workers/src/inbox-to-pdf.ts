@@ -18,11 +18,17 @@ async function convert(docId: string): Promise<void> {
   const finalDir = dirname(dirname(src)); // .../inbox/{id}/_pending -> .../inbox/{id}
   const finalPath = join(finalDir, `${docId}.pdf`);
   writeFileSync(finalPath, bytes, { mode: 0o600 });
-  if (existsSync(src)) unlinkSync(src);
+  // Update the row before deleting the pending source so a retry after a failed
+  // update re-runs cleanly instead of hitting "source missing".
   await db
     .update(inboxDocuments)
     .set({ status: 'ready', storedPath: finalPath, contentType: 'application/pdf' })
     .where(eq(inboxDocuments.id, docId));
+  try {
+    if (existsSync(src)) unlinkSync(src);
+  } catch (err) {
+    logger.warn('inbox-to-pdf: pending source cleanup failed (doc already ready)', { docId, src, err: String(err) });
+  }
   logger.info('inbox-to-pdf done', { docId, finalPath });
 }
 
@@ -30,9 +36,14 @@ export function startInboxToPdfWorker(): Worker {
   const worker = new Worker('inbox-to-pdf', async (job) => convert(job.data.docId), { connection, concurrency: 2 });
   worker.on('failed', async (job, err) => {
     logger.error('inbox-to-pdf failed', { id: job?.data?.docId, err: String(err), attempts: job?.attemptsMade });
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
-      await db.update(inboxDocuments).set({ status: 'failed', retryCount: job.attemptsMade }).where(eq(inboxDocuments.id, job.data.docId));
+    try {
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
+        await db.update(inboxDocuments).set({ status: 'failed', retryCount: job.attemptsMade }).where(eq(inboxDocuments.id, job.data.docId));
+      }
+    } catch (dbErr) {
+      logger.error('inbox-to-pdf failed-handler could not persist status', { id: job?.data?.docId, err: String(dbErr) });
     }
   });
+  worker.on('error', (err) => logger.error('inbox-to-pdf worker error', { err: String(err) }));
   return worker;
 }

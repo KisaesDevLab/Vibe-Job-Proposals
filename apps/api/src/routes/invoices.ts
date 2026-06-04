@@ -13,6 +13,7 @@ import {
 import { db, sql as rawsql, invoices, invoiceLineItems, invoiceMarkupOverrides, timeEntries, expenses, invoiceEmails } from '@darrow/db';
 import { eq, and, isNull, inArray, desc, asc } from 'drizzle-orm';
 import { ah, HttpError } from '../error-handler.js';
+import { attachStreamErrorHandler } from '../http-stream.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 import { writeAudit } from '../audit.js';
 import { buildPreview, finalizeInvoice } from '../services/invoice.js';
@@ -230,7 +231,9 @@ invoicesRouter.post(
 function streamFile(res: any, path: string | null, type: string, filename: string) {
   if (!path || !existsSync(path)) return res.status(404).json(fail('not_ready', 'File not generated yet'));
   res.type(type).setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  createReadStream(path).pipe(res);
+  const stream = createReadStream(path);
+  attachStreamErrorHandler(stream, res, { route: 'invoices.streamFile', path, filename });
+  stream.pipe(res);
 }
 
 invoicesRouter.get(

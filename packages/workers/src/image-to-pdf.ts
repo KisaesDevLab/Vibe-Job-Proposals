@@ -41,11 +41,18 @@ async function convert(attachmentId: string): Promise<void> {
   const finalDir = dirname(dirname(src)); // .../expenses/{id}/_pending -> .../expenses/{id}
   const finalPath = join(finalDir, `${attachmentId}.pdf`);
   writeFileSync(finalPath, bytes, { mode: 0o600 });
-  if (existsSync(src)) unlinkSync(src);
+  // Point the row at the final PDF BEFORE deleting the pending source. If this
+  // update fails, the source survives so a BullMQ retry re-runs cleanly;
+  // deleting first would strand the attachment ("source missing") on retry.
   await db
     .update(expenseAttachments)
     .set({ status: 'ready', storedPath: finalPath, contentType: 'application/pdf' })
     .where(eq(expenseAttachments.id, attachmentId));
+  try {
+    if (existsSync(src)) unlinkSync(src);
+  } catch (err) {
+    logger.warn('image-to-pdf: pending source cleanup failed (attachment already ready)', { attachmentId, src, err: String(err) });
+  }
   logger.info('image-to-pdf done', { attachmentId, finalPath });
 }
 
@@ -57,9 +64,14 @@ export function startImageToPdfWorker(): Worker {
   );
   worker.on('failed', async (job, err) => {
     logger.error('image-to-pdf failed', { id: job?.data?.attachmentId, err: String(err), attempts: job?.attemptsMade });
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
-      await db.update(expenseAttachments).set({ status: 'failed', retryCount: job.attemptsMade }).where(eq(expenseAttachments.id, job.data.attachmentId));
+    try {
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
+        await db.update(expenseAttachments).set({ status: 'failed', retryCount: job.attemptsMade }).where(eq(expenseAttachments.id, job.data.attachmentId));
+      }
+    } catch (dbErr) {
+      logger.error('image-to-pdf failed-handler could not persist status', { id: job?.data?.attachmentId, err: String(dbErr) });
     }
   });
+  worker.on('error', (err) => logger.error('image-to-pdf worker error', { err: String(err) }));
   return worker;
 }

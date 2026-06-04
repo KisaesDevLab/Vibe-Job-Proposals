@@ -67,8 +67,10 @@ async function countAttachmentPages(attachments: { storedPath: string }[]): Prom
     try {
       const doc = await PDFDocument.load(readFileSync(a.storedPath));
       n += doc.getPageCount();
-    } catch {
-      // ignore — counted as 0 pages; the merge step also logs the failure
+    } catch (err) {
+      // Counted as 0 pages (the merge step skips it too), but log for context
+      // rather than swallowing silently.
+      logger.warn('render-package: could not count pages for attachment', { path: a.storedPath, err: String(err) });
     }
   }
   return n;
@@ -78,9 +80,14 @@ export function startRenderPackageWorker(): Worker {
   const worker = new Worker('render-package', async (job) => render(job.data.invoiceId), { connection, concurrency: 1 });
   worker.on('failed', async (job, err) => {
     logger.error('render-package failed', { invoiceId: job?.data?.invoiceId, err: String(err), attempts: job?.attemptsMade });
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 2)) {
-      await sql`UPDATE invoices SET package_status='failed', package_error=${String(err)} WHERE id=${job.data.invoiceId}`;
+    try {
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 2)) {
+        await sql`UPDATE invoices SET package_status='failed', package_error=${String(err).slice(0, 300)} WHERE id=${job.data.invoiceId}`;
+      }
+    } catch (dbErr) {
+      logger.error('render-package failed-handler could not persist status', { invoiceId: job?.data?.invoiceId, err: String(dbErr) });
     }
   });
+  worker.on('error', (err) => logger.error('render-package worker error', { err: String(err) }));
   return worker;
 }

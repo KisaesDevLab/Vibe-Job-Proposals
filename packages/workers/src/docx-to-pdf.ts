@@ -40,10 +40,18 @@ async function run(invoiceId: string): Promise<void> {
 export function startDocxToPdfWorker(): Worker {
   const worker = new Worker('docx-to-pdf', async (job) => run(job.data.invoiceId), { connection, concurrency: 1 });
   worker.on('failed', async (job, err) => {
-    logger.error('docx-to-pdf failed', { invoiceId: job?.data?.invoiceId, err: String(err), attempts: job?.attemptsMade });
-    if (job && job.attemptsMade >= (job.opts.attempts ?? 2)) {
-      await sql`UPDATE invoices SET pdf_status='failed', generation_error=${String(err)} WHERE id=${job.data.invoiceId}`;
+    // LibreOffice failures carry their diagnostics on err.stderr (from execFile);
+    // log it server-side so LO conversion problems are debuggable (Phase 15 task 17).
+    const stderr = (err as { stderr?: string })?.stderr;
+    logger.error('docx-to-pdf failed', { invoiceId: job?.data?.invoiceId, err: String(err), stderr: stderr ? String(stderr).slice(0, 1000) : undefined, attempts: job?.attemptsMade });
+    try {
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 2)) {
+        await sql`UPDATE invoices SET pdf_status='failed', generation_error=${String(err).slice(0, 300)} WHERE id=${job.data.invoiceId}`;
+      }
+    } catch (dbErr) {
+      logger.error('docx-to-pdf failed-handler could not persist status', { invoiceId: job?.data?.invoiceId, err: String(dbErr) });
     }
   });
+  worker.on('error', (err) => logger.error('docx-to-pdf worker error', { err: String(err) }));
   return worker;
 }

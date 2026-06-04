@@ -15,4 +15,9 @@ export const logger = winston.createLogger({
   transports: [new winston.transports.Console()],
 });
 
+// ioredis emits 'error' on connection problems; with no listener Node treats it
+// as an unhandled error and can crash every worker sharing this client. Log and
+// let ioredis auto-reconnect (maxRetriesPerRequest:null keeps ops pending).
+connection.on('error', (err: unknown) => logger.error('redis connection error', { err: String(err) }));
+
 export const STORAGE = process.env.STORAGE_ROOT ?? '/storage';
